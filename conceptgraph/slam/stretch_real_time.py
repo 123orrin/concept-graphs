@@ -9,9 +9,9 @@ import uuid
 from pathlib import Path
 import pickle
 import gzip
+import time
 
 # Third-party imports
-from conceptgraph.utils.record3d_utils import DemoApp
 import cv2
 import numpy as np
 import scipy.ndimage as ndi
@@ -153,7 +153,7 @@ class ConceptGraphIntegration(Node):
         
         self.rgb_subscription = self.create_subscription(Image, '/camera/color/image_raw', self.rgb_callback, 1)
         self.depth_subscription = self.create_subscription(Image, '/camera/aligned_depth_to_color/image_raw', self.depth_callback, 1)
-        self.camera_info_subcription = self.create_subscription(CameraInfo, TODO, self.camera_info_callback)
+        self.camera_info_subcription = self.create_subscription(CameraInfo, '/camera/color/camera_info', self.camera_info_callback, 1)  
         self.rgb_subscription  # prevent unused variable warning
         self.depth_subscription
         self.camera_info_subcription
@@ -165,13 +165,14 @@ class ConceptGraphIntegration(Node):
         self.image_rgb = None
         self.image_depth = None
 
-        self.have_rgb = None
-        self.have_depth = None
+        self.have_rgb = False
+        self.have_depth = False
 
         # Disable torch gradient computation
         torch.set_grad_enabled(False)
 
     def timer_callback(self):
+        print('TIMER CALLBACK')
         from_frame_rel = 'camera_link'
         to_frame_rel = 'map'
 
@@ -199,6 +200,7 @@ class ConceptGraphIntegration(Node):
 
     def rgb_callback(self, msg):
         # self.get_logger().info('I heard: "%s"' % msg.data)
+        print('GOT RGB IMAGE')
         if not self.have_rgb: #
             # save rgb image
             self.image_rgb = msg.data
@@ -207,12 +209,18 @@ class ConceptGraphIntegration(Node):
     def camera_info_callback(self, msg):
         self.camera_intrinsics = msg.P
 
-    @hydra.main(version_base=None, config_path="../hydra_configs/", config_name="rerun_realtime_mapping")
-    def main(self, cfg : DictConfig):
+    #@hydra.main(version_base=None, config_path="../hydra_configs/", config_name="rerun_realtime_mapping")
+    def main(self):#, cfg : DictConfig):
         
         ###app = DemoApp()
         ###app.connect_to_device(dev_idx=0)
+        print('IN MAIN')
+        for _ in range(10):
+            rclpy.spin_once(self)
         
+        hydra.initialize(version_base=None, config_path="../hydra_configs/", job_name="concept_graphs")
+        cfg = hydra.compose(config_name="rerun_realtime_mapping_stretch")
+    
         tracker = MappingTracker()
         
         orr = OptionalReRun()
@@ -270,7 +278,7 @@ class ConceptGraphIntegration(Node):
 
             ## Initialize the detection models
             detection_model = measure_time(YOLO)('yolov8l-world.pt')
-            sam_predictor = SAM('sam_l.pt') # SAM('mobile_sam.pt') # UltraLytics SAM
+            sam_predictor = SAM('mobile_sam.pt')#SAM('sam_l.pt') # SAM('mobile_sam.pt') # UltraLytics SAM
             # sam_predictor = measure_time(get_sam_predictor)(cfg) # Normal SAM
             clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
                 "ViT-H-14", "laion2b_s32b_b79k"
@@ -326,6 +334,8 @@ class ConceptGraphIntegration(Node):
             s_depth = self.image_depth
             s_intrinsic_mat = self.camera_intrinsics
             s_camera_pose = self.pose
+            
+            print(f"RGBD IMAGE: {s_rgb}")
 
             # save the rgb to the stream folder with an appropriate name
             curr_stream_rgb_path = stream_rgb_path / f"{frame_idx}.jpg"
@@ -723,6 +733,7 @@ class ConceptGraphIntegration(Node):
 
 def main(args=None):
     try:
+        rclpy.init()
         node = ConceptGraphIntegration()
         node.main()
     except KeyboardInterrupt:
