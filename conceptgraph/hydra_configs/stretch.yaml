@@ -1,0 +1,4 @@
+dataset_root: /home/hornywombat/repos/conceptgraphs/stretch-data/stretch
+dataset_config: /home/hornywombat/repos/conceptgraphs/concept-graphs/conceptgraph/dataset/dataconfigs/replica/replica.yaml
+scene_id: room0
+render_camera_path: /home/hornywombat/repos/conceptgraphs/concept-graphs/conceptgraph/dataset/dataconfigs/replica/replica_room0.json

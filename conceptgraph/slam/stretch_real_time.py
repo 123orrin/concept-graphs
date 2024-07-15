@@ -24,6 +24,8 @@ from omegaconf import DictConfig
 import open_clip
 from ultralytics import YOLO, SAM
 import supervision as sv
+from matplotlib import pyplot as plt
+import threading
 
 # Local application/library specific imports
 from conceptgraph.utils.optional_rerun_wrapper import (
@@ -99,11 +101,16 @@ from conceptgraph.utils.general_utils import get_vis_out_path, cfg_to_dict, chec
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image as ros_Image, CameraInfo
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
+from lsy_interfaces.srv import ConceptGraphService
+
+from cv_bridge import CvBridge
+bridge = CvBridge()
+
 
 # A logger for this file
 #@hydra.main(version_base=None, config_path="../hydra_configs/", config_name="rerun_realtime_mapping")
@@ -127,17 +134,17 @@ def quaternion_to_rotation_matrix(q):
     ])
 
 def make_matrix(t: TransformStamped):
-        q0 = t.transform.rotation.x
-        q1 = t.transform.rotation.y
-        q2 = t.transform.rotation.z
-        q3 = t.transform.rotation.w
-        rotation_matrix = quaternion_to_rotation_matrix([q0, q1, q2, q3])
+    q0 = t.transform.rotation.x
+    q1 = t.transform.rotation.y
+    q2 = t.transform.rotation.z
+    q3 = t.transform.rotation.w
+    rotation_matrix = quaternion_to_rotation_matrix([q0, q1, q2, q3])
 
-        transformation_matrix = np.eye(4)  # Create a 4x4 identity matrix
-        transformation_matrix[:3, :3] = rotation_matrix  # Set the top-left 3x3 to the rotation matrix
-        transformation_matrix[:3, 3] = [t.transform.translation.x, t.transform.translation.y, t.transform.translation.z]
+    transformation_matrix = np.eye(4)  # Create a 4x4 identity matrix
+    transformation_matrix[:3, :3] = rotation_matrix  # Set the top-left 3x3 to the rotation matrix
+    transformation_matrix[:3, 3] = [t.transform.translation.x, t.transform.translation.y, t.transform.translation.z]
 
-        return transformation_matrix
+    return transformation_matrix
 
 
 class ConceptGraphIntegration(Node):
@@ -145,78 +152,43 @@ class ConceptGraphIntegration(Node):
     def __init__(self):
         super().__init__('concept_graph')
 
-        self.target_frame = self.declare_parameter(
-          'target_frame', 'map').get_parameter_value().string_value
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.timer = self.create_timer(0.1, self.timer_callback)
-        
-        self.rgb_subscription = self.create_subscription(Image, '/camera/color/image_raw', self.rgb_callback, 1)
-        self.depth_subscription = self.create_subscription(Image, '/camera/aligned_depth_to_color/image_raw', self.depth_callback, 1)
-        self.camera_info_subcription = self.create_subscription(CameraInfo, '/camera/color/camera_info', self.camera_info_callback, 1)  
-        self.rgb_subscription  # prevent unused variable warning
-        self.depth_subscription
-        self.camera_info_subcription
+        #self.timer_callback_group = MutuallyExclusiveCallbackGroup()
+        #self.rgb_callback_group = MutuallyExclusiveCallbackGroup()
+        #self.depth_callback_group = MutuallyExclusiveCallbackGroup()
+        #self.camera_info_callback_group = MutuallyExclusiveCallbackGroup()
 
-        self.camera_intrinsics = None
-
-        self.pose = None
-        self.pose_prev = None
-        self.image_rgb = None
-        self.image_depth = None
-
-        self.have_rgb = False
-        self.have_depth = False
+        self.cli = self.create_client(ConceptGraphService, 'concept_graph_service')
+        while not self.cli.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+        self.req = ConceptGraphService.Request()
 
         # Disable torch gradient computation
         torch.set_grad_enabled(False)
 
-    def timer_callback(self):
-        print('TIMER CALLBACK')
-        from_frame_rel = 'camera_link'
-        to_frame_rel = 'map'
+    def process_inputs(self, cfg, result):
+        s_rgb = np.array(result.rgb_image.data).reshape(cfg.image_height, cfg.image_width, 3)
+        s_rgb = np.rot90(s_rgb, 3)
+        s_rgb = cv2.cvtColor(s_rgb, cv2.COLOR_RGB2BGR)
 
-        try:
-            t = self.tf_buffer.lookup_transform(
-                to_frame_rel,
-                from_frame_rel,
-                rclpy.time.Time())
+        s_depth = np.frombuffer(result.depth_image.data, dtype=np.uint16)  # shape =(width*height,)
+        s_depth = s_depth.reshape(cfg.image_height, cfg.image_width)
+        s_depth = np.rot90(s_depth, 3)
+
+        s_intrinsic_mat = np.eye(4)
+        s_intrinsic_mat[:3, :] = np.array(result.camera_info.p).reshape(3, 4)
+        s_intrinsic_mat = torch.from_numpy(s_intrinsic_mat).float()
+
+        s_camera_pose = make_matrix(result.pose)
+
+        return s_rgb, s_depth, s_intrinsic_mat, s_camera_pose
         
-        except TransformException as ex:
-            self.get_logger().info(
-                f'Could not transform {to_frame_rel} to {from_frame_rel}: {ex}')
-            return
-        
-        self.pose = make_matrix(t)
-        self.have_rgb = False
-        self.have_depth = False
 
-    def depth_callback(self, msg):
-        # self.get_logger().info('I heard: "%s"' % msg.data)
-        if not self.have_depth: # gets the image that is published right after the pose is published
-            # save depth image
-            self.image_depth = msg.data
-            self.have_depth = True
-
-    def rgb_callback(self, msg):
-        # self.get_logger().info('I heard: "%s"' % msg.data)
-        print('GOT RGB IMAGE')
-        if not self.have_rgb: #
-            # save rgb image
-            self.image_rgb = msg.data
-            self.have_rgb = True
-
-    def camera_info_callback(self, msg):
-        self.camera_intrinsics = msg.P
 
     #@hydra.main(version_base=None, config_path="../hydra_configs/", config_name="rerun_realtime_mapping")
     def main(self):#, cfg : DictConfig):
         
         ###app = DemoApp()
         ###app.connect_to_device(dev_idx=0)
-        print('IN MAIN')
-        for _ in range(10):
-            rclpy.spin_once(self)
         
         hydra.initialize(version_base=None, config_path="../hydra_configs/", job_name="concept_graphs")
         cfg = hydra.compose(config_name="rerun_realtime_mapping_stretch")
@@ -308,10 +280,12 @@ class ConceptGraphIntegration(Node):
 
         ###for frame_idx in trange(total_frames):
         while rclpy.ok():
-            if self.pose == self.pose_prev:
-                pass
-            self.pose_prev = self.pose
-            
+            print(counter)
+            self.future = self.cli.call_async(self.req)
+            rclpy.spin_until_future_complete(self, self.future)
+            print('Obtained Concept Graph Info')
+            result = self.future.result()
+
             if counter == 500:
                 run_detections = False
 
@@ -330,13 +304,11 @@ class ConceptGraphIntegration(Node):
             
             # Get the frame data
             ###s_rgb, s_depth, s_intrinsic_mat, s_camera_pose = app.get_frame_data()
-            s_rgb = self.image_rgb
-            s_depth = self.image_depth
-            s_intrinsic_mat = self.camera_intrinsics
-            s_camera_pose = self.pose
-            
-            print(f"RGBD IMAGE: {s_rgb}")
+            s_rgb, s_depth, s_intrinsic_mat, s_camera_pose = self.process_inputs(cfg, result)
 
+            #plt.imshow(s_rgb, interpolation='nearest')
+            #plt.show()	
+            
             # save the rgb to the stream folder with an appropriate name
             curr_stream_rgb_path = stream_rgb_path / f"{frame_idx}.jpg"
             cv2.imwrite(str(curr_stream_rgb_path), s_rgb)
@@ -408,7 +380,7 @@ class ConceptGraphIntegration(Node):
                 )
                 
                 # No edges during streaming for now
-                labels, edges, edge_image = make_vlm_edges_and_captions(image, curr_det, obj_classes, detection_class_labels, det_exp_vis_path, color_path, make_edges_flag=False, openai_client=openai_client)
+                labels, edges, edge_image, captions = make_vlm_edges_and_captions(image, curr_det, obj_classes, detection_class_labels, det_exp_vis_path, color_path, make_edges_flag=False, openai_client=openai_client)
                 
                 image_crops, image_feats, text_feats = compute_clip_features_batched(
                     image_rgb, curr_det, clip_model, clip_preprocess, clip_tokenizer, obj_classes.get_classes_arr(), cfg.device)
@@ -431,6 +403,7 @@ class ConceptGraphIntegration(Node):
                     "detection_class_labels": detection_class_labels,
                     "labels": labels,
                     "edges": edges,
+                    "captions": captions,
                 }
 
                 raw_gobs = results
@@ -445,6 +418,9 @@ class ConceptGraphIntegration(Node):
 
                     depth_image_rgb = cv2.normalize(depth_array, None, 0, 255, cv2.NORM_MINMAX)
                     depth_image_rgb = depth_image_rgb.astype(np.uint8)
+                    #plt.imshow(depth_image_rgb, interpolation='nearest')
+                    #plt.show()
+                    
                     depth_image_rgb = cv2.cvtColor(depth_image_rgb, cv2.COLOR_GRAY2BGR)
                     annotated_depth_image, labels = vis_result_fast_on_depth(depth_image_rgb, curr_det, obj_classes.get_classes_arr())
                     cv2.imwrite(str(vis_save_path).replace(".jpg", "_depth.jpg"), annotated_depth_image)
@@ -538,13 +514,16 @@ class ConceptGraphIntegration(Node):
                     })
                 continue 
 
+            try:
             ### compute similarities and then merge
-            spatial_sim = compute_spatial_similarities(
-                spatial_sim_type=cfg['spatial_sim_type'], 
-                detection_list=detection_list, 
-                objects=objects,
-                downsample_voxel_size=cfg['downsample_voxel_size']
-            )
+                spatial_sim = compute_spatial_similarities(
+                    spatial_sim_type=cfg['spatial_sim_type'], 
+                    detection_list=detection_list, 
+                    objects=objects,
+                    downsample_voxel_size=cfg['downsample_voxel_size']
+                )
+            except:
+                continue
 
             visual_sim = compute_visual_similarities(detection_list, objects)
 
@@ -735,6 +714,8 @@ def main(args=None):
     try:
         rclpy.init()
         node = ConceptGraphIntegration()
+        #executor = MultiThreadedExecutor(4)
+        #executor.add_node(node)
         node.main()
     except KeyboardInterrupt:
         node.get_logger().info('Keyboard Interrupt. Shutting Down Node...')

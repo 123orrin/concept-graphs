@@ -443,6 +443,7 @@ def make_vlm_edges_and_captions(image, curr_det, obj_classes, detection_class_la
     )
     
     edges = []
+    captions = []
     edge_image = None
     if make_edges_flag:
         vis_save_path_for_vlm = get_vlm_annotated_image_path(det_exp_vis_path, color_path)

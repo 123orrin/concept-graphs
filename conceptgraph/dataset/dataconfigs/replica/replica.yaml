@@ -1,4 +1,4 @@
-dataset_name: 'replica'
+dataset_name: "replica"
 meshing:
   eval_rec: True
 tracking:
@@ -23,8 +23,8 @@ mapping:
   iters_first: 1500
   iters: 60
 camera_params:
-  image_height: 680
-  image_width: 1200
+  image_height: 720
+  image_width: 1280
   fx: 600.0
   fy: 600.0
   cx: 599.5
