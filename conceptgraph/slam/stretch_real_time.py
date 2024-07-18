@@ -41,7 +41,7 @@ from conceptgraph.utils.optional_rerun_wrapper import (
 from conceptgraph.utils.optional_wandb_wrapper import OptionalWandB
 from conceptgraph.utils.geometry import rotation_matrix_to_quaternion
 from conceptgraph.utils.logging_metrics import DenoisingTracker, MappingTracker
-from conceptgraph.utils.vlm import get_obj_rel_from_image_gpt4v, get_openai_client
+from conceptgraph.utils.vlm import consolidate_captions, get_obj_rel_from_image_gpt4v, get_openai_client
 from conceptgraph.utils.ious import mask_subtract_contained
 from conceptgraph.utils.general_utils import (
     ObjectClasses, 
@@ -56,7 +56,8 @@ from conceptgraph.utils.general_utils import (
     make_vlm_edges_and_captions, 
     measure_time, 
     save_detection_results, 
-    save_hydra_config, 
+    save_hydra_config,
+    save_obj_json,
     save_objects_for_frame, 
     save_pointcloud, 
     should_exit_early, 
@@ -214,6 +215,7 @@ class ConceptGraphIntegration(Node):
 
         # For visualization
         if cfg.vis_render:
+            print('VISUALIZING THE RENDERING')
             view_param = read_pinhole_camera_parameters(cfg.render_camera_path)
             obj_renderer = OnlineObjectRenderer(
                 view_param = view_param,
@@ -275,6 +277,7 @@ class ConceptGraphIntegration(Node):
 
         exit_early_flag = False
         counter = 0
+        actual_counter = 0
         frame_idx = 0
         total_frames = 500 # adjust as you like
 
@@ -283,7 +286,6 @@ class ConceptGraphIntegration(Node):
             print(counter)
             self.future = self.cli.call_async(self.req)
             rclpy.spin_until_future_complete(self, self.future)
-            print('Obtained Concept Graph Info')
             result = self.future.result()
 
             if counter == 500:
@@ -300,7 +302,7 @@ class ConceptGraphIntegration(Node):
 
             # If exit early flag is set and we're not at the last frame, skip this iteration
             if exit_early_flag and frame_idx < total_frames - 1:
-                continue
+                break
             
             # Get the frame data
             ###s_rgb, s_depth, s_intrinsic_mat, s_camera_pose = app.get_frame_data()
@@ -514,16 +516,16 @@ class ConceptGraphIntegration(Node):
                     })
                 continue 
 
-            try:
+            #try:
             ### compute similarities and then merge
-                spatial_sim = compute_spatial_similarities(
-                    spatial_sim_type=cfg['spatial_sim_type'], 
-                    detection_list=detection_list, 
-                    objects=objects,
-                    downsample_voxel_size=cfg['downsample_voxel_size']
-                )
-            except:
-                continue
+            spatial_sim = compute_spatial_similarities(
+                spatial_sim_type=cfg['spatial_sim_type'], 
+                detection_list=detection_list, 
+                objects=objects,
+                downsample_voxel_size=cfg['downsample_voxel_size']
+            )                
+            #except:
+            #    continue
 
             visual_sim = compute_visual_similarities(detection_list, objects)
 
@@ -553,7 +555,7 @@ class ConceptGraphIntegration(Node):
                 device=cfg['device']
                 # Note: Removed 'match_method' and 'phys_bias' as they do not appear in the provided merge function
             )
-            map_edges = process_edges(match_indices, gobs, len(objects), objects, map_edges)
+            map_edges = process_edges(match_indices, gobs, len(objects), objects, map_edges, frame_idx)
 
             is_final_frame = frame_idx == total_frames - 1
             if is_final_frame:
@@ -657,6 +659,19 @@ class ConceptGraphIntegration(Node):
                     create_symlink=True
                 )
 
+            if counter % 50 == 0:
+                print("saving json")
+                for object in objects:
+                    obj_captions = object['captions'][:20]
+                    consolidated_caption = consolidate_captions(openai_client, obj_captions)
+                    object['consolidated_caption'] = consolidated_caption
+                
+                save_obj_json(
+                    exp_suffix=cfg.exp_suffix,
+                    exp_out_path=exp_out_path,
+                    objects=objects
+                )
+
             owandb.log({
                 "frame_idx": frame_idx,
                 "counter": counter,
@@ -676,8 +691,18 @@ class ConceptGraphIntegration(Node):
                     "exit_early_flag": exit_early_flag,
                     "is_final_frame": is_final_frame,
                     })
+            
+
+            
+
         # LOOP OVER -----------------------------------------------------
-        
+
+        # Consolidate captions 
+        for object in objects:
+            obj_captions = object['captions'][:20]
+            consolidated_caption = consolidate_captions(openai_client, obj_captions)
+            object['consolidated_caption'] = consolidated_caption
+            
         handle_rerun_saving(cfg.use_rerun, cfg.save_rerun, cfg.exp_suffix, exp_out_path)
 
         # Save the pointcloud
@@ -691,6 +716,13 @@ class ConceptGraphIntegration(Node):
                 latest_pcd_filepath=cfg.latest_pcd_filepath,
                 create_symlink=True,
                 edges=map_edges
+            )
+            
+        if cfg.save_json:
+            save_obj_json(
+                exp_suffix=cfg.exp_suffix,
+                exp_out_path=exp_out_path,
+                objects=objects
             )
 
         # Save metadata if all frames are saved

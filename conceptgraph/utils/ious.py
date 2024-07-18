@@ -167,7 +167,7 @@ def compute_3d_iou_accurate_batch(bbox1, bbox2):
     bbox1 = bbox1[:, [0, 2, 5, 3, 1, 7, 4, 6]]
     bbox2 = bbox2[:, [0, 2, 5, 3, 1, 7, 4, 6]]
     
-    inter_vol, iou = ops.box3d_overlap(bbox1.float(), bbox2.float())
+    inter_vol, iou = ops.box3d_overlap(bbox1.float(), bbox2.float(), eps=1e-2)
     
     return iou
 
