@@ -184,11 +184,10 @@ def main(cfg : DictConfig):
 
         # Set the classes for the detection model
         detection_model.set_classes(obj_classes.get_classes_arr())
-
-        openai_client = get_openai_client()
-        
     else:
         print("\n".join(["NOT Running detections..."] * 10))
+
+    openai_client = get_openai_client()
 
     save_hydra_config(cfg, exp_out_path)
     save_hydra_config(detections_exp_cfg, exp_out_path, is_detection_config=True)
