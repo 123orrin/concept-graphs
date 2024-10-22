@@ -1,3 +1,11 @@
+import cv2
+import os
+# import PyQt5
+
+# # Set the QT_QPA_PLATFORM_PLUGIN_PATH environment variable
+# pyqt_plugin_path = os.path.join(os.path.dirname(PyQt5.__file__), "Qt", "plugins", "platforms")
+# os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = pyqt_plugin_path
+
 import copy
 import json
 import os
@@ -15,7 +23,8 @@ import open_clip
 
 import distinctipy
 
-from gradslam.structures.pointclouds import Pointclouds
+# from conceptgraph.utils.pointclouds import Pointclouds
+from conceptgraph.utils.pointclouds import Pointclouds
 
 from conceptgraph.slam.slam_classes import MapObjectList
 from conceptgraph.utils.vis import LineMesh
@@ -58,29 +67,26 @@ def get_parser():
     return parser
 
 def load_result(result_path):
+    # check if theres a potential symlink for result_path and resolve it
+    potential_path = os.path.realpath(result_path)
+    if potential_path != result_path:
+        print(f"Resolved symlink for result_path: {result_path} -> \n{potential_path}")
+        result_path = potential_path
     with gzip.open(result_path, "rb") as f:
         results = pickle.load(f)
+
+    if not isinstance(results, dict):
+        raise ValueError("Results should be a dictionary! other types are not supported!")
     
-    if isinstance(results, dict):
-        objects = MapObjectList()
-        objects.load_serializable(results["objects"])
-        
-        if results['bg_objects'] is None:
-            bg_objects = None
-        else:
-            bg_objects = MapObjectList()
-            bg_objects.load_serializable(results["bg_objects"])
-
-        class_colors = results['class_colors']
-    elif isinstance(results, list):
-        objects = MapObjectList()
-        objects.load_serializable(results)
-
+    objects = MapObjectList()
+    objects.load_serializable(results["objects"])
+    bg_objects = MapObjectList()
+    bg_objects.extend(obj for obj in objects if obj['is_background'])
+    if len(bg_objects) == 0:
         bg_objects = None
-        class_colors = distinctipy.get_colors(len(objects), pastel_factor=0.5)
-        class_colors = {str(i): c for i, c in enumerate(class_colors)}
-    else:
-        raise ValueError("Unknown results type: ", type(results))
+    class_colors = results['class_colors']
+        
+    
         
     return objects, bg_objects, class_colors
 
@@ -151,13 +157,17 @@ def main(args):
     cmap = matplotlib.colormaps.get_cmap("turbo")
     
     if bg_objects is not None:
-        indices_bg = np.arange(len(objects), len(objects) + len(bg_objects))
-        objects.extend(bg_objects)
+        indices_bg = []
+        for obj_idx, obj in enumerate(objects):
+            if obj['is_background']:
+                indices_bg.append(obj_idx)
+        # indices_bg = np.arange(len(objects), len(objects) + len(bg_objects))
+        # objects.extend(bg_objects)
         
     # Sub-sample the point cloud for better interactive experience
     for i in range(len(objects)):
         pcd = objects[i]['pcd']
-        pcd = pcd.voxel_down_sample(0.05)
+        # pcd = pcd.voxel_down_sample(0.05)
         objects[i]['pcd'] = pcd
     
     pcds = copy.deepcopy(objects.get_values("pcd"))
@@ -291,6 +301,10 @@ def main(args):
         probs = F.softmax(similarities, dim=0)
         max_prob_idx = torch.argmax(probs)
         similarity_colors = cmap(normalized_similarities.detach().cpu().numpy())[..., :3]
+
+        max_prob_object = objects[max_prob_idx]
+        print(f"Most probable object is at index {max_prob_idx} with class name '{max_prob_object['class_name']}'")
+        print(f"location xyz: {max_prob_object['bbox'].center}")
         
         for i in range(len(objects)):
             pcd = pcds[i]
@@ -329,3 +343,45 @@ if __name__ == "__main__":
     parser = get_parser()
     args = parser.parse_args()
     main(args)
+
+'''
+
+python scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/pcd_saves/full_pcd_none_overlap_maskconf0.95_simsum1.2_dbscan.1_merge20_masksub_post.pkl.gz
+
+python scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/pcd_saves/full_pcd_ram_class_ram_stride50_no_bg__ram_class_ram_stride50_no_bg_overlap_maskconf0.25_simsum1.2_dbscan.1_post.pkl.gz
+
+python scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/pcd_saves/full_pcd_ram__yolo_class_ram_stride50_no_bg4__ram_yolo_class_ram_stride50_no_bg_overlap_maskconf0.25_simsum1.2_dbscan.1_post.pkl.gz
+
+
+python scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/pcd_saves/full_pcd_ram_class_ram_stride50_no_bg__TEST_ram_class_ram_stride50_no_bg_overlap_maskconf0.25_simsum1.2_dbscan.1.pkl.gz
+
+
+python scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/pcd_saves/full_pcd_scannet200_class_ram_stride50_yes_bg2_mapping_scannet200_class_ram_stride50_yes_bg2.pkl.gz
+
+python scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/exps/exp_s_mapping_yes_bg_38/full_pcd_s_mapping_yes_bg_38.pkl.gz
+
+python scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/exps/exp_s_mapping_yes_bg_39/full_pcd_s_mapping_yes_bg_39_post.pkl.gz
+
+
+python concept-graphs/conceptgraph/scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/exps/exp_s_mapping_yes_bg_40/full_pcd_s_mapping_yes_bg_40_post.pkl.gz
+
+python concept-graphs/conceptgraph/scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/exps/exp_s_mapping_yes_bg_41/full_pcd_s_mapping_yes_bg_41_post.pkl.gz
+
+python concept-graphs/conceptgraph/scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/exps/exp_s_mapping_yes_bg_42/full_pcd_s_mapping_yes_bg_42_post.pkl.gz
+
+python concept-graphs/conceptgraph/scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/exps/exp_s_mapping_yes_bg_43/full_pcd_s_mapping_yes_bg_43_post.pkl.gz
+
+python concept-graphs/conceptgraph/scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/office0/exps/s_mapping_yes_bg_multirun_45/full_pcd_s_mapping_yes_bg_multirun_45.pkl.gz
+
+
+python concept-graphs/conceptgraph/scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/room0/exps/s_mapping_yes_bg_multirun_45/full_pcd_s_mapping_yes_bg_multirun_45.pkl.gz
+
+python concept-graphs/conceptgraph/scripts/visualize_cfslam_results.py --result_path /home/kuwajerw/new_local_data/new_replica/Replica/office0/exps/s_mapping_yes_bg_multirun_45/full_pcd_s_mapping_yes_bg_multirun_45.pkl.gz
+
+
+
+python concept-graphs/conceptgraph/scripts/streamlined_detections.py
+
+kernprof -l concept-graphs/conceptgraph/slam/streamlined_mapping.py
+'''
+

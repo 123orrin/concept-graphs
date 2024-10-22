@@ -1,0 +1,7 @@
+defaults:
+  - base_paths
+  
+dataset_root: ${data_root}/mask3D
+scene_id: scene_ipad_preprocessed
+dataset_config: ${dataset_root}/${scene_id}/dataconfig.yaml
+render_camera_path: ${repo_root}/conceptgraph/dataset/dataconfigs/record3d/record_3d_camera.json

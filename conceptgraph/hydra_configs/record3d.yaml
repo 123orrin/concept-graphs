@@ -1,0 +1,7 @@
+defaults:
+  - base_paths
+  
+dataset_root: ${data_root}/record3D
+scene_id: 2024-08-02--15-46-24_boxes_fan_preprocessed
+dataset_config: ${dataset_root}/${scene_id}/dataconfig.yaml
+render_camera_path: ${repo_root}/conceptgraph/dataset/dataconfigs/record3d/record_3d_camera.json

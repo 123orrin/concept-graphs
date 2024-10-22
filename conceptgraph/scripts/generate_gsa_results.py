@@ -20,6 +20,7 @@ import pickle
 import gzip
 import open_clip
 
+from ultralytics import YOLO
 import torch
 import torchvision
 from torch.utils.data import Dataset
@@ -101,8 +102,8 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end", type=int, default=-1)
     parser.add_argument("--stride", type=int, default=1)
 
-    parser.add_argument("--desired_height", type=int, default=480)
-    parser.add_argument("--desired_width", type=int, default=640)
+    parser.add_argument("--desired-height", type=int, default=480)
+    parser.add_argument("--desired-width", type=int, default=640)
 
     parser.add_argument("--box_threshold", type=float, default=0.25)
     parser.add_argument("--text_threshold", type=float, default=0.25)
@@ -111,7 +112,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--class_set", type=str, default="scene", 
                         choices=["scene", "generic", "minimal", "tag2text", "ram", "none"], 
                         help="If none, no tagging and detection will be used and the SAM will be run in dense sampling mode. ")
-    parser.add_argument("--detector", type=str, default="dino", 
+    parser.add_argument("--detector", type=str, default="yolo", 
                         choices=["yolo", "dino"], 
                         help="When given classes, whether to use YOLO-World or GroundingDINO to detect objects. ")
     parser.add_argument("--add_bg_classes", action="store_true", 
@@ -340,9 +341,7 @@ def main(args: argparse.Namespace):
     global_classes = set()
     
     # Initialize a YOLO-World model
-    if args.detector == "yolo":
-        from ultralytics import YOLO
-        yolo_model_w_classes = YOLO('yolov8l-world.pt')  # or choose yolov8m/l-world.pt
+    yolo_model_w_classes = YOLO('yolov8l-world.pt')  # or choose yolov8m/l-world.pt
     
     if args.class_set == "scene":
         # Load the object meta information
@@ -422,8 +421,8 @@ def main(args: argparse.Namespace):
 
         color_path = Path(color_path)
         
-        vis_save_path = args.dataset_root / args.scene_id / f"gsa_vis_{save_name}" / color_path.name
-        detections_save_path = args.dataset_root / args.scene_id / f"gsa_detections_{save_name}" / color_path.name
+        vis_save_path = color_path.parent.parent / f"gsa_vis_{save_name}" / color_path.name
+        detections_save_path = color_path.parent.parent / f"gsa_detections_{save_name}" / color_path.name
         detections_save_path = detections_save_path.with_suffix(".pkl.gz")
         
         os.makedirs(os.path.dirname(vis_save_path), exist_ok=True)
@@ -462,7 +461,7 @@ def main(args: argparse.Namespace):
                 "room", "kitchen", "office", "house", "home", "building", "corner",
                 "shadow", "carpet", "photo", "shade", "stall", "space", "aquarium", 
                 "apartment", "image", "city", "blue", "skylight", "hallway", 
-                "bureau", "modern", "salon", "doorway", "wall lamp", "wood floor"
+                "bureau", "modern", "salon", "doorway", "wall lamp"
             ]
             bg_classes = ["wall", "floor", "ceiling"]
 
@@ -532,12 +531,6 @@ def main(args: argparse.Namespace):
                     detections.xyxy = detections.xyxy[valid_idx]
                     detections.confidence = detections.confidence[valid_idx]
                     detections.class_id = detections.class_id[valid_idx]
-
-                    # # Somehow some detections will have class_id=-None, remove them
-                    # valid_idx = [i for i, val in enumerate(detections.class_id) if val is not None]
-                    # detections.xyxy = detections.xyxy[valid_idx]
-                    # detections.confidence = detections.confidence[valid_idx]
-                    # detections.class_id = [detections.class_id[i] for i in valid_idx]
             elif args.detector == "yolo":
                 # YOLO 
                 # yolo_model.set_classes(classes)

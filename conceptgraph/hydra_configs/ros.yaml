@@ -1,0 +1,54 @@
+defaults:
+  - base_paths
+
+# Not used (just here to prevent errors)
+dataset_root: ${data_root}/external
+scene_id: conceptgraphs_short
+dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml
+# Not used (end)
+
+color_path: ${dataset_root}/${scene_id}/color
+
+#device: "cpu"
+
+rotate: True
+use_pc_for_depth: True
+
+min_depth: 0.1
+max_depth: 10.0
+
+true_height: 720
+true_width: 1280
+
+desired_height: 370
+desired_width: 640
+
+periodically_save_pcd: True 
+periodically_save_pcd_interval: 10
+
+camera_params:
+  # image_height: 720
+  # image_width: 1280
+  # fx: 762.72
+  # fy: 754.75
+  # cx: 640.0
+  # cy: 360.0
+  # image_height: 704
+  # image_width: 1260
+  # fx: 762.72
+  # fy: 754.75
+  # cx: 627.0
+  # cy: 360.0
+  image_height: 720
+  image_width: 1280
+  # fx: 750.025
+  # fy: 749.733
+  # cx: 636.264
+  # cy: 369.197
+  fx: 791.7353879123823
+  fy: 791.7353879123823
+  cx: 640.0
+  cy: 360.0
+  png_depth_scale: 1000 #for depth image in png format
+  crop_edge: 0
+

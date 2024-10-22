@@ -1,0 +1,43 @@
+dataset_name: 'record3d'
+# meshing:
+#   eval_rec: True
+# tracking:
+#   vis_freq: 50
+#   vis_inside_freq: 25
+#   ignore_edge_W: 100
+#   ignore_edge_H: 100
+#   seperate_LR: False
+#   const_speed_assumption: True
+#   lr: 0.001
+#   pixels: 200
+#   iters: 10
+# mapping:
+#   every_frame: 5
+#   vis_freq: 50
+#   vis_inside_freq: 30
+#   mesh_freq: 50
+#   ckpt_freq: 500
+#   keyframe_every: 50
+#   mapping_window_size: 5
+#   pixels: 1000
+#   iters_first: 1500
+#   iters: 60
+# camera_params:
+#   image_height: 720
+#   image_width: 1280
+#   fx: 748.591370
+#   fy: 748.133484
+#   cx: 636.617432 # Half of width, adjusted from 719.7.. considering integer pixel coordinates
+#   cy: 359.736969 # Half of height, adjusted from 928.1.. considering integer pixel coordinates
+#   png_depth_scale: 1000 #for depth image in png format
+#   crop_edge: 0
+
+camera_params:
+  image_height: 1440
+  image_width: 1920
+  fx: 1.594272827148437500e+03
+  fy: 1.594272827148437500e+03
+  cx: 9.560785522460937500e+02 # Half of width, adjusted from 719.7.. considering integer pixel coordinates
+  cy: 7.239266357421875000e+02 # Half of height, adjusted from 928.1.. considering integer pixel coordinates
+  png_depth_scale: 3277 #for depth image in png format
+  crop_edge: 0

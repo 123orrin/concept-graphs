@@ -1,6 +1,14 @@
+import cv2
+import os
+import PyQt5
+
+# Set the QT_QPA_PLATFORM_PLUGIN_PATH environment variable
+pyqt_plugin_path = os.path.join(os.path.dirname(PyQt5.__file__), "Qt", "plugins", "platforms")
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = pyqt_plugin_path
+
 import argparse
 import json
-import os, glob
+import glob
 import imageio
 import natsort
 import gzip, pickle
@@ -61,13 +69,12 @@ def load_frame(path):
         frame = cached_frame
         
     if isinstance(frame, dict):
-        camera_pose = frame["camera_pose"]
+        camera_pose = frame.get("camera_pose")
         objects = MapObjectList()
-        objects.load_serializable(frame["objects"])
-        
-        if frame['bg_objects'] is None:
-            bg_objects = None
-        else:
+        objects.load_serializable(frame.get("objects"))
+
+        bg_objects = None
+        if frame.get('bg_objects') is not None:
             bg_objects = MapObjectList()
             bg_objects.load_serializable(frame["bg_objects"])
     elif isinstance(frame, list):
@@ -79,7 +86,11 @@ def load_frame(path):
         camera_pose = None
     else:
         raise ValueError("Unknown frame type: ", type(frame))
-        
+    print()
+    print("Loaded frame: ", path)
+    print("Number of objects: ", len(objects))
+    print("Frame_idx: ", frame.get("frame_idx"))
+    print("Color_path: ", frame.get("color_path"))
     return camera_pose, objects, bg_objects
 
 def main(args):
@@ -235,6 +246,14 @@ def main(args):
             return
         main.frame_idx = idx
         print("Frame index set to: ", main.frame_idx)
+
+    def go_forward_one_frame(vis):
+        main.frame_idx += 1
+        main.frame_idx = min(main.frame_idx, len(frame_paths)-1)
+        
+    def go_backward_one_frame(vis):
+        main.frame_idx -= 1
+        main.frame_idx = max(main.frame_idx, 0)
     
     vis.register_key_callback(ord("R"), color_mode_rgb)
     vis.register_key_callback(ord("C"), color_mode_class)
@@ -249,6 +268,9 @@ def main(args):
     vis.register_key_callback(ord("K"), toggle_cam)
     vis.register_key_callback(ord("X"), toggle_bbox)
     vis.register_key_callback(ord("N"), go_to_frame_idx)
+    
+    vis.register_key_callback(ord("A"), go_backward_one_frame)
+    vis.register_key_callback(ord("D"), go_forward_one_frame)
 
     vis.register_key_callback(ord("T"), toggle_top)
     vis.register_key_callback(ord("S"), save_vis_capture)

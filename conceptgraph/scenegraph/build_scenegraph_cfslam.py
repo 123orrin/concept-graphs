@@ -13,11 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Literal, Union
 from textwrap import wrap
+
 from conceptgraph.utils.general_utils import prjson
 
 import cv2
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import numpy as np
@@ -65,6 +64,9 @@ class ProgramArgs:
 
     # Path to map file
     mapfile: str = "saved/room0/map/scene_map_cfslam.pkl.gz"
+
+    # Path to file storing segment class names
+    class_names_file: str = "saved/room0/gsa_classes_ram.json"
 
     # Device to use
     device: str = "cuda:0"
@@ -161,8 +163,8 @@ def crop_image_and_mask(image: Image, mask: np.ndarray, x1: int, y1: int, x2: in
     image = np.array(image)
     # Verify initial dimensions
     if image.shape[:2] != mask.shape:
-        raise ValueError("Initial shape mismatch: Image shape {} != Mask shape {}".format(image.shape, mask.shape))
-        
+        print("Initial shape mismatch: Image shape {} != Mask shape {}".format(image.shape, mask.shape))
+        return None, None
 
     # Define the cropping coordinates
     x1 = max(0, x1 - padding)
@@ -183,7 +185,7 @@ def crop_image_and_mask(image: Image, mask: np.ndarray, x1: int, y1: int, x2: in
     
     # convert the image back to a pil image
     image_crop = Image.fromarray(image_crop)
-    
+
     return image_crop, mask_crop
 
 def blackout_nonmasked_area(image_pil, mask):
@@ -263,9 +265,23 @@ def extract_node_captions(args):
     #     preprocess_and_encode_pil_image,
     # )
 
+    # Load class names from the json or text file
+    # otherwise raise an error
+    class_names = None
+    with open(Path(args.class_names_file), "r") as f:
+
+        if Path(args.class_names_file).suffix == ".json":
+            class_names = json.load(f)
+        elif Path(args.class_names_file).suffix == ".txt":
+            class_names = [cls.strip() for cls in f.readlines()]
+        else:
+            raise ValueError("Class names file must be either a json or text file")
+        
+    print(f"Line 280, class_names: {class_names}")
+
     # Creating a namespace object to pass args to the LLaVA chat object
     chat_args = SimpleNamespace()
-    chat_args.model_path = os.getenv("LLAVA_CKPT_PATH")
+    chat_args.model_path = os.getenv("LLAVA_MODEL_PATH")
     chat_args.conv_mode = "v0_mmtag" # "multimodal"
     chat_args.num_gpus = 1
 
@@ -312,9 +328,10 @@ def extract_node_captions(args):
             image = Image.open(obj["color_path"][idx_det]).convert("RGB")
             xyxy = obj["xyxy"][idx_det]
             class_id = obj["class_id"][idx_det]
+            class_name = class_names[class_id]
             # Retrieve and crop mask
             mask = obj["mask"][idx_det]
-            
+
             padding = 10
             x1, y1, x2, y2 = xyxy
             # image_crop = crop_image_pil(image, x1, y1, x2, y2, padding=padding)
@@ -529,7 +546,8 @@ def extract_object_tag_from_json_str(json_str):
 
 def build_scenegraph(args):
     from conceptgraph.slam.slam_classes import MapObjectList
-    from conceptgraph.slam.utils import compute_overlap_matrix
+    # from conceptgraph.slam.utils import compute_overlap_matrix
+    from conceptgraph.slam.utils import compute_overlap_matrix_general
 
     # Load the scene map
     scene_map = MapObjectList()
@@ -619,7 +637,7 @@ def build_scenegraph(args):
         pkl.dump(scene_map.to_serializable(), f)
 
     print("Computing bounding box overlaps...")
-    bbox_overlaps = compute_overlap_matrix(args, scene_map)
+    bbox_overlaps = compute_overlap_matrix_general(args, scene_map)
 
     # Construct a weighted adjacency matrix based on similarity scores
     weights = []
@@ -739,7 +757,7 @@ def build_scenegraph(args):
                     if elapsed_time > TIMEOUT:
                         print("Timed out exceeded!")
                         output_dict["object_relation"] = "FAIL"
-                        output_dict["reason"] = "FAIL"
+                        continue
                     else:
                         try:
                             # Attempt to parse the output as a JSON

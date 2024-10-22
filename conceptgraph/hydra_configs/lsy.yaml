@@ -1,0 +1,6 @@
+defaults:
+  - base_paths
+
+dataset_root: ${data_root}/external
+scene_id: conceptgraphs_short
+dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml

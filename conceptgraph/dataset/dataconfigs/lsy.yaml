@@ -1,0 +1,27 @@
+dataset_name: 'lsy'
+
+camera_params:
+  # image_height: 720
+  # image_width: 1280
+  # fx: 762.72
+  # fy: 754.75
+  # cx: 640.0
+  # cy: 360.0
+  # image_height: 704
+  # image_width: 1260
+  # fx: 762.72
+  # fy: 754.75
+  # cx: 627.0
+  # cy: 360.0
+  image_height: 720
+  image_width: 1280
+  # fx: 750.025
+  # fy: 749.733
+  # cx: 636.264
+  # cy: 369.197
+  fx: 791.7353879123823
+  fy: 791.7353879123823
+  cx: 640.0
+  cy: 360.0
+  png_depth_scale: 1000 #for depth image in png format
+  crop_edge: 0

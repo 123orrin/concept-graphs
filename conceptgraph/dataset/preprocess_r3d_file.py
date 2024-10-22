@@ -1,63 +1,64 @@
 """
-Preprocess an unzipped .r3d file to the Record3DDataset format.
+Preprocess an unzipped .r3d file to the Record3DDataset format with adjusted image resolution.
 """
 
 import glob
 import json
 import os
+import cv2
+import liblzfse
+import numpy as np
+import png
+import tyro
 import yaml
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Union
-
-import cv2
-import liblzfse  # https://pypi.org/project/pyliblzfse/
-import numpy as np
-import png  # pip install pypng
-import torch
-import tyro
-from natsort import natsorted
 from PIL import Image
 from scipy.spatial.transform import Rotation
 from tqdm import tqdm, trange
+from typing import List, Tuple, Union
+from natsort import natsorted
+from pathlib import Path
 
 @dataclass
 class ProgramArgs:
-    datapath: str = "/home/krishna/data/record3d/krishna-bcs-room"
+    datapath = "/home/lukas/Projects/concept-data/record3D/2024-08-02--15-46-24_boxes_fan"
+    output_dir = None  # Optional, set dynamically if not provided
 
+# desired_width = 1440
+# desired_height = 1920
+
+desired_width = 720
+desired_height = 960
 
 def load_depth(filepath):
     with open(filepath, 'rb') as depth_fh:
         raw_bytes = depth_fh.read()
         decompressed_bytes = liblzfse.decompress(raw_bytes)
         depth_img = np.frombuffer(decompressed_bytes, dtype=np.float32)
-
-    # depth_img = depth_img.reshape((640, 480))  # For a FaceID camera 3D Video
-    depth_img = depth_img.reshape((256, 192))  # For a LiDAR 3D Video
-
+        depth_img = depth_img.reshape((256, 192))  # Original resolution
+        depth_img = resize_depth(depth_img, desired_width, desired_height)
     return depth_img
-
 
 def load_conf(filepath):
     with open(filepath, 'rb') as conf_fh:
         raw_bytes = conf_fh.read()
         decompressed_bytes = liblzfse.decompress(raw_bytes)
         conf_img = np.frombuffer(decompressed_bytes, dtype=np.uint8)
-
-    # depth_img = depth_img.reshape((640, 480))  # For a FaceID camera 3D Video
-    conf_img = conf_img.reshape((256, 192))  # For a LiDAR 3D Video
-
+        conf_img = conf_img.reshape((256, 192))  # Original resolution
+        conf_img = resize_depth(conf_img, desired_width, desired_height)  # Using the same resizing function as depth
     return conf_img
-
 
 def load_color(filepath):
     img = cv2.imread(filepath)
-    return cv2.resize(img, (192, 256))
+    resized_img = cv2.resize(img, (desired_width, desired_height), interpolation=cv2.INTER_LINEAR)
+    return resized_img
 
+def resize_depth(depth_img, desired_width, desired_height):
+    return cv2.resize(depth_img, (desired_width, desired_height), interpolation=cv2.INTER_NEAREST)
 
 def write_color(outpath, img):
     cv2.imwrite(outpath, img)
-
 
 def write_depth(outpath, depth):
     depth = depth * 1000
@@ -68,9 +69,27 @@ def write_depth(outpath, depth):
 def write_conf(outpath, conf):
     np.save(outpath, conf)
 
+def write_conf_img(outpath, conf):
+    conf_img = Image.fromarray(conf)
+    conf_img.save(outpath)
+
 def write_pose(outpath, pose):
     np.save(outpath, pose.astype(np.float32))
 
+def adjust_intrinsics(intrinsics_dict, original_width, original_height):
+    width_scale = desired_width / original_width
+    height_scale = desired_height / original_height
+    
+    intrinsics_dict["fx"] *= width_scale
+    intrinsics_dict["fy"] *= height_scale
+    intrinsics_dict["cx"] *= width_scale
+    intrinsics_dict["cy"] *= height_scale
+    intrinsics_dict["w"] = desired_width
+    intrinsics_dict["h"] = desired_height
+    
+    return intrinsics_dict
+
+# The rest of your functions like get_poses and get_intrinsics remain unchanged
 
 def get_poses(metadata_dict: dict) -> int:
     """Converts Record3D's metadata dict into pose matrices needed by nerfstudio
@@ -134,65 +153,75 @@ def get_intrinsics(metadata_dict: dict, downscale_factor: float = 7.5) -> int:
 
     return intrinsics_dict
 
-
 def main():
     args = tyro.cli(ProgramArgs)
     
     metadata = None
     with open(os.path.join(args.datapath, "metadata"), "r") as f:
         metadata = json.load(f)
+        
+    # If output_dir is not specified, set it to a "preprocessed" folder inside datapath parent folder
+    if args.output_dir is None:
+        datapath = Path(args.datapath)
+        args.output_dir = str(datapath.parent / (datapath.name + "_preprocessed"))
     
-    # Keys in metadata dict
-    # h, w, K, fps, dw, dh, initPose, poses, cameraType, frameTimestamps
-    # print(metadata.keys())
+    print(f"Preprocessing Record3D data from \n{args.datapath} to \n{args.output_dir}")
 
+    original_width, original_height = 192, 256 # Original resolution for scaling intrinsics
     poses = get_poses(metadata)
     intrinsics_dict = get_intrinsics(metadata)
+    intrinsics_dict = adjust_intrinsics(intrinsics_dict, original_width, original_height)
     
     color_paths = natsorted(glob.glob(os.path.join(args.datapath, "rgbd", "*.jpg")))
     depth_paths = natsorted(glob.glob(os.path.join(args.datapath, "rgbd", "*.depth")))
     conf_paths = natsorted(glob.glob(os.path.join(args.datapath, "rgbd", "*.conf")))
 
-    os.makedirs(os.path.join(args.datapath, "rgb"), exist_ok=True)
-    os.makedirs(os.path.join(args.datapath, "conf"), exist_ok=True)
-    os.makedirs(os.path.join(args.datapath, "depth"), exist_ok=True)
-    os.makedirs(os.path.join(args.datapath, "poses"), exist_ok=True)
+    # Modify paths in os.makedirs to use args.output_dir
+    os.makedirs(os.path.join(args.output_dir, "rgb"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "conf"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "depth"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "poses"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "conf_images"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "high_conf_depth"), exist_ok=True)
 
-    cfg = {}
-    cfg["dataset_name"] = "record3d"
-    cfg["camera_params"] = {}
-    cfg["camera_params"]["image_height"] = intrinsics_dict["h"]
-    cfg["camera_params"]["image_width"] = intrinsics_dict["w"]
-    cfg["camera_params"]["fx"] = intrinsics_dict["fx"].item()
-    cfg["camera_params"]["fy"] = intrinsics_dict["fy"].item()
-    cfg["camera_params"]["cx"] = intrinsics_dict["cx"].item()
-    cfg["camera_params"]["cy"] = intrinsics_dict["cy"].item()
-    cfg["camera_params"]["png_depth_scale"] = 1000.0
-    print(cfg)
-    with open(os.path.join(args.datapath, "dataconfig.yaml"), "w") as f:
+
+
+
+    cfg = {
+        "dataset_name": "record3d",
+        "camera_params": {
+            "image_height": intrinsics_dict["h"],
+            "image_width": intrinsics_dict["w"],
+            "fx": intrinsics_dict["fx"].item(),
+            "fy": intrinsics_dict["fy"].item(),
+            "cx": intrinsics_dict["cx"].item(),
+            "cy": intrinsics_dict["cy"].item(),
+            "png_depth_scale": 1000.0
+            }
+        }
+
+    with open(os.path.join(args.output_dir, "dataconfig.yaml"), "w") as f:
         yaml.dump(cfg, f)
 
     for i in trange(len(color_paths)):
         color = load_color(color_paths[i])
         depth = load_depth(depth_paths[i])
         conf = load_conf(conf_paths[i])
+        
+        # New: Generate high confidence depth image
+        high_conf_mask = conf == 2  # Create a mask where conf is 2
+        high_conf_depth = np.where(high_conf_mask, depth, 0)  # Set depth to 0 where conf is not 2
+
         basename = os.path.splitext(os.path.basename(color_paths[i]))[0]
         # color_path = os.path.splitext(os.path.basename(color_paths[i]))[0] + ".png"
-        write_color(os.path.join(args.datapath, "rgb", basename + ".png"), color)
+        write_color(os.path.join(args.output_dir, "rgb", basename + ".png"), color)
         # depth_path = os.path.splitext(os.path.basename(depth_paths[i]))[0] + ".png"
-        write_depth(os.path.join(args.datapath, "depth", basename + ".png"), depth)
+        write_depth(os.path.join(args.output_dir, "depth", basename + ".png"), depth)
         # conf_path = os.path.splitext(os.path.basename(conf_paths[i]))[0] + ".npy"
-        write_conf(os.path.join(args.datapath, "conf", basename + ".npy"), conf)
-        write_pose(os.path.join(args.datapath, "poses", basename + ".npy"), poses[i])
-        # c2w = poses[i]
-        # frame = {
-        #     "file_path": os.path.join("rgb", color_path),
-        #     "depth_path": os.path.join("depth", depth_path),
-        #     "conf_path": os.path.join("conf", conf_path),
-        #     "transform_matrix": c2w.tolist(),
-        # }
-        # frames.append(frame)
-
+        write_conf(os.path.join(args.output_dir, "conf", basename + ".npy"), conf)
+        write_conf_img(os.path.join(args.output_dir, "conf_images", basename + ".png"), conf)
+        write_pose(os.path.join(args.output_dir, "poses", basename + ".npy"), poses[i])
+        write_depth(os.path.join(args.output_dir, "high_conf_depth", basename + ".png"), high_conf_depth)
 
 if __name__ == "__main__":
     main()
