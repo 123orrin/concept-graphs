@@ -67,7 +67,7 @@ def orr_log_camera(intrinsics, adjusted_pose, prev_adjusted_pose, img_width, img
 
     # Convert the current adjusted pose to translation and quaternion for logging
     translation = adjusted_pose[:3, 3].tolist()
-    quaternion = rotation_matrix_to_quaternion(adjusted_pose[:3, :3])
+    quaternion = orr.Quaternion(xyzw=rotation_matrix_to_quaternion(adjusted_pose[:3, :3]))
     orr.log(
         "world/camera",
         orr.Transform3D(translation=translation, rotation=quaternion, from_parent=False)
