@@ -11,7 +11,7 @@ color_path: ${dataset_root}/${scene_id}/color
 
 #device: "cpu"
 
-rotate: True
+rotate: False
 use_pc_for_depth: True
 
 min_depth: 0.1

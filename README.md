@@ -152,42 +152,65 @@ ConceptGraphs is built using Python. We recommend using [Anaconda](https://www.a
 To create your python environment, run the following commands:
 
 ```bash
-# Create the conda environment
-conda create -n conceptgraph python=3.10
-conda activate conceptgraph
+# EITHER: use the mamba environment with ROS2 from https://github.com/123orrin/ros2_orbbec_slam
+mamba activate ros_cg
+
+# Add ros2_numpy for converting numpy to ROS 2 messages
+export ROS2_WS  # The location of your ROS 2 workspace if you haven't created this already. Add this to your bashrc
+cd $ROS2_WS/src
+git clone git@github.com:Box-Robotics/ros2_numpy.git
+# Build the ROS workspace. If you build the workspace with a different ROS before, remove all the buid files and build from scratch
+cd $ROS2_WS
+colcon build
+source install/setup.bash
+
+# OR: Create the mamba environment (you can find the instructions for installing mamba here: https://github.com/conda-forge/miniforge)
+mamba create -n conceptgraph python=3.10
+mamba activate conceptgraph
 
 ##### Install Pytorch according to your own setup #####
 # For example, if you have a GPU with CUDA 11.8 (We tested it Pytorch 2.0.1)
-conda install pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 pytorch-cuda=11.8 -c pytorch -c nvidia
+mamba install pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 pytorch-cuda=11.8 -c pytorch -c nvidia
 
 # Install the Faiss library (CPU version should be fine), this is used for quick indexing of pointclouds for duplicate object matching and merging
-conda install -c pytorch faiss-cpu=1.7.4 mkl=2021 blas=1.0=mkl
+mamba install -c pytorch faiss-cpu=1.7.4 mkl=2021 blas=1.0=mkl
 
 # Install Pytorch3D (https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md)
 # conda install pytorch3d -c pytorch3d # This detects a conflict. You can use the command below, maybe with a different version
-conda install https://anaconda.org/pytorch3d/pytorch3d/0.7.4/download/linux-64/pytorch3d-0.7.4-py310_cu118_pyt201.tar.bz2
+mamba install https://anaconda.org/pytorch3d/pytorch3d/0.7.4/download/linux-64/pytorch3d-0.7.4-py310_cu118_pyt201.tar.bz2
 
 # We find that cuda development toolkit is the least problemantic way to install cuda. 
 # Make sure the version you install is at least close to your cuda version. 
 # See here: https://anaconda.org/conda-forge/cudatoolkit-dev
-conda install -c conda-forge cudatoolkit-dev
+mamba install -c conda-forge cudatoolkit-dev
 
 # Install the other required libraries
-pip install tyro open_clip_torch wandb h5py openai hydra-core distinctipy ultralytics dill supervision open3d imageio natsort kornia rerun-sdk pyliblzfse pypng git+https://github.com/ultralytics/CLIP.git
+python3 -m pip install tyro open_clip_torch wandb h5py openai hydra-core distinctipy ultralytics dill supervision open3d imageio natsort kornia rerun-sdk pyliblzfse pypng git+https://github.com/ultralytics/CLIP.git
 
 # You also need to ensure that the installed packages can find the right cuda installation.
 # You can do this by setting the CUDA_HOME environment variable.
-# You can manually set it to the python environment you are using, or set it to the conda prefix of the environment.
-# for me its export CUDA_HOME=/home/kuwajerw/anaconda3/envs/conceptgraph
-export CUDA_HOME=/path/to/anaconda3/envs/conceptgraph
+# You can manually set it to the python environment you are using, or set it to the conda prefix (also works for mamba) of the environment (as done here).
+export CUDA_HOME=$CONDA_PREFIX
 
 # Finally install conceptgraphs
-cd /path/to/code/ # wherever you want to install conceptgraphs
-# for me its /home/kuwajerw/repos/
-git clone https://github.com/concept-graphs/concept-graphs.git
-cd concept-graphs
-git checkout ali-dev
+# If you haven't already: set the environment variables for your repos
+export REPO=/path/to/code/ # wherever you your repositories. Add this to your bashrc if you haven't already!
+cd $REPO
+git clone git@github.com:123orrin/concept-graphs.git
+export CG_REPO=$REPO/concept-graphs  # Add this to your bashrc!
+cd $CG_REPO
+git checkout orrin-dev
 pip install -e .
+
+# To run the pipeline using ROS 2 follow these steps after connecting the Orbbec Femto Bolt to your machine
+# Start one terminal and run the following commands. This will start the pipeline to publish the camera poses and the point clouds. Of course this only worked if you have previously followed the steps in: https://github.com/123orrin/ros2_orbbec_slam
+mamba activate ros_cg
+ros2 run sai_orbbec sai_publisher
+
+# In a second terminal run the following commands. This should open rerun.io and you should see the annotated point cloud and detections when moving the camera around
+mamba activate ros_cg
+cd $CG_REPO/conceptgraph/slam
+python3 ros_rerun_sai_pcd.py
 ```
 
 ### Datasets

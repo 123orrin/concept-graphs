@@ -176,3 +176,15 @@ cfslam/tmp.bash
 cfslam/wandb
 cfslam/tmp.png
 cfslam/temp.json
+
+# Collected data
+conceptgraph/dataset/external/
+
+# Models
+*.pt
+
+# Hydra logs
+.hydra/
+
+# Weights & Biases
+conceptgraph/slam/wandb/
