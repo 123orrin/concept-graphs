@@ -211,7 +211,7 @@ def vis_result_fast_on_depth(
     This is fast but of the same resolution of the input image, thus can be blurry. 
     '''
     # annotate image with detections
-    bounding_box_annotator = sv.BoundingBoxAnnotator(
+    bounding_box_annotator = sv.BoxAnnotator(
         color = color
     )
     label_annotator = sv.LabelAnnotator(
@@ -511,7 +511,7 @@ def vis_result_fast(
     This is fast but of the same resolution of the input image, thus can be blurry. 
     '''
     # annotate image with detections
-    bounding_box_annotator = sv.BoundingBoxAnnotator(
+    bounding_box_annotator = sv.BoxAnnotator(
         color = color
     )
     label_annotator = sv.LabelAnnotator(
