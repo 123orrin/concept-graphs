@@ -25,6 +25,9 @@ import open_clip
 from ultralytics import YOLO, SAM
 import supervision as sv
 
+
+os.environ["WANDB_MODE"] = "disabled" #fuxiao disable W&B
+
 # Local application/library specific imports
 from conceptgraph.utils.optional_rerun_wrapper import (
     OptionalReRun, 
@@ -39,7 +42,8 @@ from conceptgraph.utils.optional_rerun_wrapper import (
 from conceptgraph.utils.optional_wandb_wrapper import OptionalWandB
 from conceptgraph.utils.geometry import rotation_matrix_to_quaternion
 from conceptgraph.utils.logging_metrics import DenoisingTracker, MappingTracker
-from conceptgraph.utils.vlm import get_obj_rel_from_image_gpt4v, get_openai_client
+#from conceptgraph.utils.vlm import get_obj_rel_from_image_gpt4v, get_openai_client#fuxiao delete openai
+from conceptgraph.utils.vlm import get_obj_rel_from_image_gpt4v
 from conceptgraph.utils.ious import mask_subtract_contained
 from conceptgraph.utils.general_utils import (
     ObjectClasses, 
@@ -438,7 +442,7 @@ def main(cfg : DictConfig):
         # Set the classes for the detection model
         detection_model.set_classes(obj_classes.get_classes_arr())
 
-        openai_client = get_openai_client()
+        #openai_client = get_openai_client()
         
     else:
         print("\n".join(["NOT Running detections..."] * 10))
