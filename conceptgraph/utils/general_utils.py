@@ -685,7 +685,7 @@ def save_pointcloud(exp_suffix, exp_out_path, cfg, objects, obj_classes, latest_
     with gzip.open(pcd_save_path, "wb") as f:
         pickle.dump(results, f)
     print(f"Saved point cloud to {pcd_save_path}")
-    if edges is not None:
+    if edges is not None:   
         print(f"Also saved edges to {pcd_save_path}")
 
     # Create or update the symlink if requested
