@@ -35,3 +35,11 @@ point_cloud.colors = o3d.utility.Vector3dVector(colors)
 
 # Visualize the point cloud
 o3d.visualization.draw_geometries([point_cloud])
+
+""""
+# Save the point cloud to a .ply file
+output_ply_path = os.path.splitext(file_path)[0] + ".ply"
+o3d.io.write_point_cloud(output_ply_path, point_cloud)
+
+print(f"Point cloud has been saved to {output_ply_path}")
+""""

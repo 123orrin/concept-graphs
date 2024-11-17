@@ -145,7 +145,7 @@ def visualize_fr3(vis, fr3_path):
     vis.add_geometry(robot_pcd)
 
     # save the robot pcd to a ply file
-    o3d.io.write_point_cloud("fr3_robot_pcd.ply", robot_pcd)
+    o3d.io.write_point_cloud("fr3_robot_pcd.ply", robot_pcd) # may be interesting for future fuxiao-dev
 
     return robot_pcd
 
@@ -788,7 +788,7 @@ def main(args):
         # Save the transformed point clouds of the scene to a ply file
         filename = os.path.realpath(result_path).split(".")[0].split(".")[0]
         for i, pcd in enumerate(pcds):
-            o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
+            o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd) # may be used for fuxiao-dev
 
         # Transform planes
         for plane in planes:
