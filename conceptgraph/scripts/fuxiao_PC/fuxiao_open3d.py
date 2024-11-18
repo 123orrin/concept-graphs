@@ -4,8 +4,8 @@ import numpy as np
 import open3d as o3d
 
 # Path to the file
-file_path = '/home/fuxiao/Projects/Orbbec/concept-graphs/conceptgraph/dataset/external/conceptgraphs_short/exps/r_mapping_stride2_short/pcd_r_mapping_stride2_short.pkl'
-
+#file_path = '/home/fuxiao/Projects/Orbbec/concept-graphs/conceptgraph/dataset/external/conceptgraphs_short/exps/r_mapping_stride2_short/pcd_r_mapping_stride2_short.pkl'
+file_path = '/home/hamilton/Master_thesis/data202411171451/external/conceptgraphs_short/exps/r_mapping_stride4_short/pcd_r_mapping_stride4_short.pkl'
 # Load data from the .pkl file
 with open(file_path, 'rb') as f:
     data = pickle.load(f)
@@ -35,3 +35,11 @@ point_cloud.colors = o3d.utility.Vector3dVector(colors)
 
 # Visualize the point cloud
 o3d.visualization.draw_geometries([point_cloud])
+
+""""
+# Save the point cloud to a .ply file
+output_ply_path = os.path.splitext(file_path)[0] + ".ply"
+o3d.io.write_point_cloud(output_ply_path, point_cloud)
+
+print(f"Point cloud has been saved to {output_ply_path}")
+""""
