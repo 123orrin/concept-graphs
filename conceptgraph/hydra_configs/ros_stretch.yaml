@@ -12,7 +12,7 @@ defaults:
   - _self_
 
 
-detections_exp_suffix: s_detections_stride8_short # helpful label to identify your detections
+detections_exp_suffix: s_detections_stride9_short # helpful label to identify your detections
 force_detection: !!bool True
 save_detections: !!bool True
 
@@ -20,7 +20,7 @@ make_edges: !!bool True
 
 stride: 1
 end: 4000
-exp_suffix: r_mapping_stride8_short # helpful label to identify your mapping experiment
+exp_suffix: r_mapping_stride9_short # helpful label to identify your mapping experiment
 
 save_video: !!bool False
 save_objects_all_frames: !!bool False
