@@ -12,7 +12,7 @@ defaults:
   - _self_
 
 
-detections_exp_suffix: s_detections_stride9_short # helpful label to identify your detections
+detections_exp_suffix: detection_ex13 # helpful label to identify your detections
 force_detection: !!bool True
 save_detections: !!bool True
 
@@ -20,13 +20,14 @@ make_edges: !!bool True
 
 stride: 1
 end: 4000
-exp_suffix: r_mapping_stride9_short # helpful label to identify your mapping experiment
+exp_suffix: mapping_ex13 # helpful label to identify your mapping experiment
 
 save_video: !!bool False
 save_objects_all_frames: !!bool False
 
 downsample_voxel_size: 0.001
-obj_pcd_max_points: 5000
+#obj_pcd_max_points: 5000
+obj_pcd_max_points: 5000 #fuxiao modified for a denser pcd in 10k and 300k, for more than 10 tablewares on the table, even 10k might exeed the memory limit
 
 # downsample_voxel_size: 0.001
 # obj_pcd_max_points: 300000
@@ -35,21 +36,34 @@ obj_pcd_max_points: 5000
 debug_render: !!bool False
 vis_render: !!bool False
 
-denoise_interval: 10            # Run DBSCAN every k frame. This operation is heavy
-filter_interval: 10              # Filter objects that have too few associations or are too small
-merge_interval: 10               # Merge objects based on geometric and semantic similarity
+#denoise_interval: 10           # Run DBSCAN every k frame. This operation is heavy
+#filter_interval: 10              # Filter objects that have too few associations or are too small
+#merge_interval: 10               # Merge objects based on geometric and semantic similarity
 # denoise_interval: 2           # Run DBSCAN every k frame. This operation is heavy
 # filter_interval: 2            # Filter objects that have too few associations or are too small
 # merge_interval: 2             # Merge objects based on geometric and semantic similarity
-run_denoise_final_frame: !!bool False
-# run_denoise_final_frame: !!bool True
+
+#fuxiao modified for cleaner pcd
+denoise_interval: 10    # Run DBSCAN every k frame. This operation is heavy
+filter_interval: 10         # Filter objects that have too few associations or are too small
+merge_interval: 10         # Merge objects based on geometric and semantic similarity
+
+
+
+
+
+
+# run_denoise_final_frame: !!bool False
+run_denoise_final_frame: !!bool True # fuxiao enable for cleaner pcd
 run_filter_final_frame: !!bool True
 run_merge_final_frame: !!bool True
 
 # dbscan_remove_noise: !!bool True
 dbscan_remove_noise: !!bool True
-dbscan_eps: 0.25
-dbscan_min_points: 10
+#dbscan_eps: 0.25 
+dbscan_eps: 0.25 # Fuxiao considers tuning eps smaller to seperate one bowl from another
+dbscan_min_points: 10 # Fuxiao: let's firstly keep the dbscan para in the original way
+
 # Selection criteria of the fused object point cloud
 obj_min_points: 0
 obj_min_detections: 3
