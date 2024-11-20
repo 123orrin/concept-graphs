@@ -3,7 +3,7 @@ defaults:
 
 # Not used (just here to prevent errors)
 dataset_root: ${data_root}/external
-scene_id: conceptgraphs_short
+scene_id: "{date}_scene"
 dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml
 # Not used (end)
 

@@ -3,6 +3,7 @@ import copy
 import json
 import logging
 from pathlib import Path
+from datetime import datetime
 # from conceptgraph.utils.logging_metrics import track_denoising, 
 from conceptgraph.utils.logging_metrics import DenoisingTracker, MappingTracker 
 import cv2
@@ -1307,6 +1308,10 @@ def prepare_objects_save_vis(objects: MapObjectList, downsample_size: float=0.02
 def process_cfg(cfg: DictConfig):
     cfg.dataset_root = Path(cfg.dataset_root)
     cfg.dataset_config = Path(cfg.dataset_config)
+
+    # Get the current date and time and update scene_id accordingly
+    current_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+    cfg.scene_id = cfg.scene_id.format(date=current_datetime)
     
     if cfg.dataset_config.name != "multiscan.yaml":
         # For datasets whose depth and RGB have the same resolution
