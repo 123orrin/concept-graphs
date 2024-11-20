@@ -621,7 +621,7 @@ def main(cfg : DictConfig):
         # Don't apply any transformation otherwise
         adjusted_pose = unt_pose
         
-        prev_adjusted_pose = orr_log_camera(intrinsics, adjusted_pose, prev_adjusted_pose, cfg.image_width, cfg.image_height, frame_idx)
+        prev_adjusted_pose = orr_log_camera(intrinsics, adjusted_pose, prev_adjusted_pose, cfg.desired_width, cfg.desired_height, frame_idx)
         
         orr_log_rgb_image(color_path)
         orr_log_annotated_image(color_path, det_exp_vis_path)
