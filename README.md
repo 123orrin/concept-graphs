@@ -201,7 +201,9 @@ export CG_REPO=$REPO/concept-graphs  # Add this to your bashrc!
 cd $CG_REPO
 git checkout orrin-dev
 pip install -e .
-
+```
+### Running the pipeline
+```bash
 # To run the pipeline using ROS 2 follow these steps after connecting the Orbbec Femto Bolt to your machine
 # Start one terminal and run the following commands. This will start the pipeline to publish the camera poses and the point clouds. Of course this only worked if you have previously followed the steps in: https://github.com/123orrin/ros2_orbbec_slam
 mamba activate ros_cg
@@ -212,6 +214,27 @@ mamba activate ros_cg
 cd $CG_REPO/conceptgraph/slam
 python3 ros_rerun_sai_pcd.py
 ```
+
+#### Remote Visualization
+If you are trying to use conceptgraphs on a workstation, you won't be able to see the rerun.io window. Some additional steps for this are necessary. 
+
+On the remote machine run the following
+```bash
+# Start a Xfvb virtual screen on display :99
+Xvfb :99 -screen 0 1024x768x24 &
+
+# set the display environment variable
+export DISPLAY=:99
+
+# If you haven't installed x11vnc yet, install it
+sudo apt-get install x11vnc 
+
+# Start the vnc server
+x11vnc -display :99 -nopw -forever
+```
+When starting the VNC server, it will tell you the port (e.g., PORT=5900) that you need for the next step on the local machine. On the local machine start Remmina (comes preinstalled on Ubuntu) and switch to VNC and type REMOTE-IP:PORT and hit enter. 
+Then continue with the same steps as above in Running the pipeline. You may have to export the display environment variable again. 
+crazyflies123
 
 ### Datasets
 
