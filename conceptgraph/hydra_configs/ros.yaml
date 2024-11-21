@@ -9,7 +9,7 @@ dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml
 
 color_path: ${dataset_root}/${scene_id}/color
 
-#device: "cpu"
+device: cuda
 
 rotate: False
 use_pc_for_depth: True
