@@ -8,6 +8,14 @@ dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml
 # Not used (end)
 
 color_path: ${dataset_root}/${scene_id}/color
+depth_path: ${dataset_root}/${scene_id}/depth
+pose_path: ${dataset_root}/${scene_id}/pose
+intrinsics_path: ${dataset_root}/${scene_id}/intrinsics
+
+save_color: True
+save_depth: True
+save_pose: True
+save_intrinsics: True
 
 #device: "cpu"
 

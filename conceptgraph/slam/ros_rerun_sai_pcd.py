@@ -483,23 +483,53 @@ def main(cfg : DictConfig):
                                                                                   use_pc_for_depth=cfg.use_pc_for_depth)
         #color_tensor2, depth_tensor2, intrinsics2, *_ = dataset[frame_idx]
 
-        # Read info about current frame from dataset
+        # Read info about current frame from ROS
+        # Set up paths for saving information
+        save_paths = []
         # color image
-        color_path = Path(cfg.color_path) / f"{frame_idx:06}.png"
-        # Check if path exists up to the file name
-        if not color_path.parent.exists():
-            # Create the directory if it doesn't exist
-            color_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(color_path), color_tensor.cpu().numpy())
-        image_original_pil = Image.open(color_path)
-        # color and depth tensors, and camera instrinsics matrix
+        if cfg.save_color:
+            color_path = Path(cfg.color_path) / f"{frame_idx:06}.png"
+            save_paths.append(color_path)
+        # depth image
+        if cfg.save_depth:
+            depth_path = Path(cfg.depth_path) / f"{frame_idx:06}.png"
+            save_paths.append(depth_path)
+        # pose
+        if cfg.save_pose:
+            pose_path = Path(cfg.pose_path) / f"{frame_idx:06}.npy"
+            save_paths.append(pose_path)
+        # camera intrinsics
+        if cfg.save_intrinsics and frame_idx == 0:              
+            intrinsics_path = Path(cfg.intrinsics_path) / f"{frame_idx:06}.npy"
+            save_paths.append(intrinsics_path)
 
-        # Covert to numpy and do some sanity checks
+        for save_path in save_paths:
+            # Check if path exists up to the file name
+            if not save_path.parent.exists():
+                # Create the directory if it doesn't exist
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save the camera intrinsics
+        if cfg.save_intrinsics and frame_idx == 0:
+            np.save(intrinsics_path, intrinsics.cpu().numpy())
+
+        # Save the color image
+        color_np = color_tensor.cpu().numpy() # (H, W, 3)
+        if cfg.save_color:
+            cv2.imwrite(str(color_path), color_np)
+            # image_original_pil = Image.open(color_path)  # Not needed anymore since we are using rerun
+
         depth_tensor = depth_tensor[..., 0]
         depth_array = depth_tensor.cpu().numpy()
         # cv2.imshow("depth", depth_array)
         # cv2.waitKey(0)
-        color_np = color_tensor.cpu().numpy() # (H, W, 3)
+        
+        # Save the depth image
+        if cfg.save_depth:
+            # Saving the depth image in milimeters
+            cv2.imwrite(str(depth_path), (depth_array * 1000).astype(np.uint16))    
+        
+        # do some sanity checks
         image_rgb = (color_np).astype(np.uint8) # (H, W, 3)
         assert image_rgb.max() > 1, "Image is not in range [0, 255]"
 
@@ -620,6 +650,10 @@ def main(cfg : DictConfig):
 
         # Don't apply any transformation otherwise
         adjusted_pose = unt_pose
+
+        # save the pose
+        if cfg.save_pose:
+            np.save(pose_path, adjusted_pose)
         
         prev_adjusted_pose = orr_log_camera(intrinsics, adjusted_pose, prev_adjusted_pose, cfg.desired_width, cfg.desired_height, frame_idx)
         
@@ -807,24 +841,24 @@ def main(cfg : DictConfig):
                 color_path
             )
         
-        if cfg.vis_render:
-            # render a frame, if needed (not really used anymore since rerun)
-            vis_render_image(
-                objects,
-                obj_classes,
-                obj_renderer,
-                image_original_pil,
-                adjusted_pose,
-                frames,
-                frame_idx,
-                color_path,
-                cfg.obj_min_detections,
-                cfg.class_agnostic,
-                cfg.debug_render,
-                is_final_frame,
-                cfg.exp_out_path,
-                cfg.exp_suffix,
-            )
+        # if cfg.vis_render:
+        #     # render a frame, if needed (not really used anymore since rerun)
+        #     vis_render_image(
+        #         objects,
+        #         obj_classes,
+        #         obj_renderer,
+        #         image_original_pil,
+        #         adjusted_pose,
+        #         frames,
+        #         frame_idx,
+        #         color_path,
+        #         cfg.obj_min_detections,
+        #         cfg.class_agnostic,
+        #         cfg.debug_render,
+        #         is_final_frame,
+        #         cfg.exp_out_path,
+        #         cfg.exp_suffix,
+        #     )
 
         if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_interval == 0):
             # save the pointcloud
