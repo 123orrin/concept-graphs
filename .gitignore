@@ -188,3 +188,5 @@ conceptgraph/dataset/external/
 
 # Weights & Biases
 conceptgraph/slam/wandb/
+
+Log/
