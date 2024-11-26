@@ -172,7 +172,7 @@ class Subscriber(Node):
     
     def _process_color(self, cfg, rotate):
         # Get data
-        color = np.array(self.color_msg.data).astype(np.uint8).reshape(cfg.true_height, cfg.true_width, 3)
+        color = np.array(self.color_msg.data).astype(np.uint8).reshape(cfg.true_height, cfg.true_width, 3) # pass true_height and true_width from cfg file
         # Rotate if necessary
         if rotate:
             color = np.rot90(color, -1)
@@ -343,7 +343,7 @@ class Subscriber(Node):
 torch.set_grad_enabled(False)
 
 # A logger for this file
-@hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_stretch")
+@hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_tableware")
 # @profile
 def main(cfg : DictConfig):
     tracker = MappingTracker()

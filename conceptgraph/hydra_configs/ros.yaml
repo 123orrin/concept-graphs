@@ -3,11 +3,12 @@ defaults:
 
 # Not used (just here to prevent errors)
 dataset_root: ${data_root}/external
-scene_id: conceptgraphs_short
+#scene_id: conceptgraphs_short
+scene_id: tablewares #modify for tablewares, but will be covered by settings in ros_tableware.yaml
 dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml
 # Not used (end)
 
-color_path: ${dataset_root}/${scene_id}/color
+color_path: ${dataset_root}/${scene_id}/color #
 
 #device: "cpu"
 
