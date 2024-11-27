@@ -17,7 +17,7 @@ dataset_root: ${data_root}/external
 
 
 dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml
-scene_id: tableware_0_3 #to cover the "scene_id: conceptgraphs_short" in lsy.yaml
+scene_id: tableware_1_0 #to cover the "scene_id: conceptgraphs_short" in lsy.yaml
 
 color_path: ${dataset_root}/${scene_id}/color #
 

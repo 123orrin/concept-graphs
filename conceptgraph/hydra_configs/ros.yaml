@@ -9,10 +9,17 @@ dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml
 # Not used (end)
 
 color_path: ${dataset_root}/${scene_id}/color #
+depth_path: ${dataset_root}/${scene_id}/depth
+pose_path: ${dataset_root}/${scene_id}/pose
+intrinsics_path: ${dataset_root}/${scene_id}/intrinsics
 
+save_color: True
+save_depth: False
+save_pose: True
+save_intrinsics: True
 #device: "cpu"
 
-rotate: False
+rotate: False # 
 use_pc_for_depth: True
 
 min_depth: 0.1
@@ -21,8 +28,10 @@ max_depth: 10.0
 true_height: 720
 true_width: 1280
 
-desired_height: 370
-desired_width: 640
+#desired_height: 370 # commented out for T2
+#desired_width: 640 # commented out for T2
+desired_height: 240
+desired_width: 320
 
 periodically_save_pcd: True 
 periodically_save_pcd_interval: 10
@@ -52,4 +61,6 @@ camera_params:
   cy: 360.0
   png_depth_scale: 1000 #for depth image in png format
   crop_edge: 0
+
+
 
