@@ -190,3 +190,8 @@ conceptgraph/dataset/external/
 conceptgraph/slam/wandb/
 
 conceptgraph/slam/Log/
+
+
+#20241127
+latest_pcd_save
+Log/

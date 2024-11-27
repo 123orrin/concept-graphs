@@ -503,9 +503,9 @@ def main(cfg : DictConfig):
             pose_path = Path(cfg.pose_path) / f"{frame_idx:06}.npy"
             save_paths.append(pose_path)
 
-        if cfg.save_intrinsics and frame_idx == 0:              
-            intrinsics_path = Path(cfg.intrinsics_path) / f"{frame_idx:06}.npy"
-            save_paths.append(intrinsics_path)
+        # if cfg.save_intrinsics and frame_idx == 0:              
+        #     intrinsics_path = Path(cfg.intrinsics_path) / f"{frame_idx:06}.npy"
+        #     save_paths.append(intrinsics_path)
 
         for save_path in save_paths:
             # Check if path exists up to the file name
@@ -516,7 +516,7 @@ def main(cfg : DictConfig):
         # save data
 
         color_np = color_tensor.cpu().numpy() # (H, W, 3) np array
-        if cfg.color_save:
+        if cfg.save_color:
             cv2.imwrite(str(color_path), color_np) # using opcv function to save the img into a path, use cpu, cv2.imwrite only support path in str format.
         # do some sanity checks
         image_rgb = (color_np).astype(np.uint8) # (H, W, 3)
@@ -525,8 +525,8 @@ def main(cfg : DictConfig):
 
         depth_tensor = depth_tensor[..., 0] # possibly (H,W,depth)
         depth_array = depth_tensor.cpu().numpy()
-        if cfg.depth_save:
-            cv2.imwrite(str(depth_path),depth_array*1000.astype(np.unit16))
+        if cfg.save_depth:
+            cv2.imwrite(str(depth_path),(depth_array*1000).astype(np.unit16))
         # cv2.imshow("depth", depth_array)
         # cv2.waitKey(0)
 
