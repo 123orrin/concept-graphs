@@ -11,8 +11,10 @@ import threading
 
 
 # Path to the file
-exp_id  = 'tableware_4_5'
+exp_id  = 'tableware_4_8'
 source_path = f'/home/fuxiao/Projects/Orbbec/concept-graphs/conceptgraph/dataset/external/{exp_id}/exps/exp_default/pcd_exp_default.pkl.gz'
+print(source_path)
+
 file_path = os.path.splitext(source_path)[0]
 
 # Decompress the .gz file
@@ -31,13 +33,12 @@ point_cloud = o3d.geometry.PointCloud()
 points = []
 colors = []
 legend_info = {}  # Dictionary to store class_name and color
+bowl_pcds = []  # To store point clouds of objects with class_name 'bowl'
 
 for obj in data['objects']:
     pcd_np = obj['pcd_np']  # 3D point cloud data for the object #shape 8512*3, num of pcd * 3D coordinates
     inst_color = obj.get('inst_color', [0.5, 0.5, 0.5]) 
-    #inst_color = obj.get('class_colors')
     class_name = next(iter(obj['class_name'])) if isinstance(obj['class_name'], (set, list)) else obj['class_name']
-    #class_name = next(iter(obj['class_name']))
 
     # Append points and colors to lists
     points.append(pcd_np)
@@ -46,6 +47,10 @@ for obj in data['objects']:
     # Store unique class_name and color for the legend
     if class_name not in legend_info:
         legend_info[class_name] = inst_color
+
+    # If class_name is 'bowl', store its pcd_np for later
+    if class_name == 'cup':
+        bowl_pcds.append(pcd_np)
 
 # Combine all points and colors into single arrays
 points = np.vstack(points)
@@ -93,3 +98,23 @@ point_cloud_thread.join()
 output_ply_path = os.path.splitext(file_path)[0] + ".ply"
 o3d.io.write_point_cloud(output_ply_path, point_cloud)
 print(f"Point cloud has been saved to {output_ply_path}")
+
+# Save point clouds of 'bowl' objects to a separate .ply file and visualize them
+if bowl_pcds:
+    combined_bowl_pcd = np.vstack(bowl_pcds)  # Combine all 'bowl' point clouds
+    bowl_point_cloud = o3d.geometry.PointCloud()
+    bowl_point_cloud.points = o3d.utility.Vector3dVector(combined_bowl_pcd)
+    
+    bowl_ply_path = os.path.join(os.path.dirname(file_path), f"{exp_id}_bowl.ply")
+    o3d.io.write_point_cloud(bowl_ply_path, bowl_point_cloud)
+    print(f"'Bowl' point cloud has been saved to {bowl_ply_path}")
+
+    # Visualize bowl point cloud
+    def display_bowl_point_cloud():
+        o3d.visualization.draw_geometries([bowl_point_cloud])
+    
+    bowl_point_cloud_thread = threading.Thread(target=display_bowl_point_cloud)
+    bowl_point_cloud_thread.start()
+    bowl_point_cloud_thread.join()
+else:
+    print("No objects with class_name 'bowl' were found.")

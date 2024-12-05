@@ -34,11 +34,11 @@ spatial_sim_type: overlap # "iou", "giou", "overlap"
 phys_bias: 0.0
 match_method: "sim_sum" # "sep_thresh", "sim_sum"
 # Only when match_method=="sep_thresh"
-semantic_threshold: 0.5 #fuxiao
-physical_threshold: 0.5 #fuxiao
+semantic_threshold: 0.5 #
+physical_threshold: 0.5 #
 # Only when match_method=="sim_sum"
 #sim_threshold: 1.2
-sim_threshold: 1.2 #fuxiao critical
+sim_threshold: 1.2 #fuxiao critical, c
 
 # For contain_number
 use_contain_number: !!bool False
@@ -46,7 +46,7 @@ contain_area_thresh: 0.95 #fuxiao
 contain_mismatch_penalty: 0.5 #fuxiao
 
 # Selection criteria on the 2D masks
-mask_area_threshold: 25 # mask with pixel area less than this will be skipped
+mask_area_threshold: 25 # mask with pixel area less than this will be skipped # fuxiao set 25 to 5 20241128 for tablewares on the ground
 mask_conf_threshold: 0.25 # mask with lower confidence score will be skipped
 max_bbox_area_ratio: 0.5 # boxes with larger areas than this will be skipped
 

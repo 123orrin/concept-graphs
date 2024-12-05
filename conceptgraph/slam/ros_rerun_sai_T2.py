@@ -10,6 +10,7 @@ from pathlib import Path
 import pickle
 import gzip
 import pdb
+import time
 
 # Third-party imports
 import cv2
@@ -152,7 +153,7 @@ class Subscriber(Node):
         self.pc_msg = msg
         self.received_pc = True
 
-    def process_inputs(self, cfg, rotate=True, use_pc_for_depth=False): #rotate is set true
+    def process_inputs(self, cfg, rotate=True, use_pc_for_depth=False): #rotate is set default true
         # Process all inputs
         color = self._process_color(cfg, rotate)
         if use_pc_for_depth:
@@ -458,12 +459,24 @@ def main(cfg : DictConfig):
     counter = 0
     frame_idx = -1
 
+    # start_time = time.time()  # Start the timer
+    # max_duration = 30  # Maximum duration in seconds
+
     node = Subscriber()
     # query_service_node = QueryNode()
     # query_service_node._attach_model(clip_model)
     # query_service_node._attach_tokenizer(clip_tokenizer)
     # query_service_node._attach_objects(objects)
     while rclpy.ok():
+        # elapsed_time = time.time() - start_time  # Calculate elapsed time
+        # if elapsed_time >= max_duration:
+        #     print(f"Stopping script after {max_duration} seconds.")
+        #     break  # Exit the loop
+        
+
+
+
+
         frame_idx += 1
         # if counter + 1 in skipped_frames:
         #     print(f"Skipping frame {frame_idx} as it is blurry")
@@ -503,7 +516,11 @@ def main(cfg : DictConfig):
             pose_path = Path(cfg.pose_path) / f"{frame_idx:06}.npy"
             save_paths.append(pose_path)
 
-        # if cfg.save_intrinsics and frame_idx == 0:              
+        if cfg.save_intrinsics and frame_idx == 0:              
+            intrinsics_path = Path(cfg.intrinsics_path) / f"{frame_idx:06}.npy"
+            save_paths.append(intrinsics_path)
+
+        # if cfg.save_intrinsics:              
         #     intrinsics_path = Path(cfg.intrinsics_path) / f"{frame_idx:06}.npy"
         #     save_paths.append(intrinsics_path)
 
@@ -539,7 +556,13 @@ def main(cfg : DictConfig):
         if cfg.save_pose:
             np.save(pose_path, adjusted_pose)
         
+                # Save the camera intrinsics
+        if cfg.save_intrinsics and frame_idx == 0:
+            np.save(intrinsics_path, intrinsics.cpu().numpy())
 
+        #         # Save the camera intrinsics
+        # if cfg.save_intrinsics:
+        #     np.save(intrinsics_path, intrinsics.cpu().numpy())
 
 
         # Load image detections for the current frame

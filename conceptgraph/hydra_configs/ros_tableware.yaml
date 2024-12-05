@@ -17,7 +17,7 @@ dataset_root: ${data_root}/external
 
 
 dataset_config: ${repo_root}/conceptgraph/dataset/dataconfigs/lsy.yaml
-scene_id: tableware_1_0 #to cover the "scene_id: conceptgraphs_short" in lsy.yaml
+scene_id: tableware_4_8 #to cover the "scene_id: conceptgraphs_short" in lsy.yaml
 
 color_path: ${dataset_root}/${scene_id}/color #
 
@@ -37,7 +37,7 @@ save_objects_all_frames: !!bool False
 
 downsample_voxel_size: 0.001
 #obj_pcd_max_points: 5000
-obj_pcd_max_points: 5000 #fuxiao modified for a denser pcd in 10k and 300k, for more than 10 tablewares on the table, even 10k might exeed the memory limit
+obj_pcd_max_points: 30000 #fuxiao modified for a denser pcd in 10k and 300k, for more than 10 tablewares on the table, even 10k might exeed the memory limit
 
 # downsample_voxel_size: 0.001
 # obj_pcd_max_points: 300000
@@ -54,8 +54,8 @@ vis_render: !!bool False
 # merge_interval: 2             # Merge objects based on geometric and semantic similarity
 
 #fuxiao modified for cleaner pcd
-denoise_interval: 10    # Run DBSCAN every k frame. This operation is heavy
-filter_interval: 10         # Filter objects that have too few associations or are too small
+denoise_interval: 2    # Run DBSCAN every k frame. This operation is heavy
+filter_interval: 2         # Filter objects that have too few associations or are too small
 merge_interval: 10         # Merge objects based on geometric and semantic similarity
 
 

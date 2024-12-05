@@ -19,7 +19,8 @@ save_pose: True
 save_intrinsics: True
 #device: "cpu"
 
-rotate: False # 
+rotate: False # cfg.rotate set false
+
 use_pc_for_depth: True
 
 min_depth: 0.1
@@ -28,10 +29,10 @@ max_depth: 10.0
 true_height: 720
 true_width: 1280
 
-#desired_height: 370 # commented out for T2
-#desired_width: 640 # commented out for T2
-desired_height: 240
-desired_width: 320
+desired_height: 370 # commented out for T2
+desired_width: 640 # commented out for T2
+# desired_height: 240 #for T2
+# desired_width: 320 #for T2
 
 periodically_save_pcd: True 
 periodically_save_pcd_interval: 10
