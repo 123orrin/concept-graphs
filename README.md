@@ -28,6 +28,13 @@ This repository contains the code for the ConceptGraphs project. ConceptGraphs b
 
 ![Splash Figure](./assets/splash-final.png)
 
+## Summary of tunable parameters and in which file they can be adjusted? (Fuxiao)
+
+### For feeding segmented point cloud of single object into the T2SQNet superquadric-fitting module
+
+- Run the ros_rerun_sai_T2.py which uses ros_tableware.yaml file for configuration
+- Critical paramerter: "obj_pcd_max_points: 30000" from ros_tableware.yaml
+
 ## Getting Started Video Tutorial 
 
 This 1.5 hours long Youtube video is detailed getting started tutorial covering the README below as of May 7, 2024. In it, I start with a blank ubuntu 20.04, and setup ConceptGraphs, and make a map using the replica dataset and an iPhone scan. Also covers the direct streaming option! I decided to be extra detailed just in case, so feel free to skip over / through the parts that are too slow for you.

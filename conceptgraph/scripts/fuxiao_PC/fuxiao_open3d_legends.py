@@ -11,7 +11,7 @@ import threading
 
 
 # Path to the file
-exp_id  = 'tableware_4_5'
+exp_id  = 'tableware_4_9'
 source_path = f'/home/fuxiao/Projects/Orbbec/concept-graphs/conceptgraph/dataset/external/{exp_id}/exps/exp_default/pcd_exp_default.pkl.gz'
 file_path = os.path.splitext(source_path)[0]
 

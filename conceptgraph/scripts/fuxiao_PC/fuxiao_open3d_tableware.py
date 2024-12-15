@@ -11,7 +11,7 @@ import threading
 
 
 # Path to the file
-exp_id  = 'tableware_4_8'
+exp_id  = 'tableware_4_17'
 source_path = f'/home/fuxiao/Projects/Orbbec/concept-graphs/conceptgraph/dataset/external/{exp_id}/exps/exp_default/pcd_exp_default.pkl.gz'
 print(source_path)
 
@@ -49,7 +49,7 @@ for obj in data['objects']:
         legend_info[class_name] = inst_color
 
     # If class_name is 'bowl', store its pcd_np for later
-    if class_name == 'cup':
+    if class_name == 'bowl':
         bowl_pcds.append(pcd_np)
 
 # Combine all points and colors into single arrays
@@ -104,10 +104,13 @@ if bowl_pcds:
     combined_bowl_pcd = np.vstack(bowl_pcds)  # Combine all 'bowl' point clouds
     bowl_point_cloud = o3d.geometry.PointCloud()
     bowl_point_cloud.points = o3d.utility.Vector3dVector(combined_bowl_pcd)
+    # print the number of points from the CG pipeline
+    print(f"Number of points in tableware point cloud:{len(combined_bowl_pcd)}")
+
     
     bowl_ply_path = os.path.join(os.path.dirname(file_path), f"{exp_id}_bowl.ply")
     o3d.io.write_point_cloud(bowl_ply_path, bowl_point_cloud)
-    print(f"'Bowl' point cloud has been saved to {bowl_ply_path}")
+    print(f"Tableware point cloud has been saved to {bowl_ply_path}")
 
     # Visualize bowl point cloud
     def display_bowl_point_cloud():
@@ -117,4 +120,4 @@ if bowl_pcds:
     bowl_point_cloud_thread.start()
     bowl_point_cloud_thread.join()
 else:
-    print("No objects with class_name 'bowl' were found.")
+    print("No objects with selected class_name were found.")
