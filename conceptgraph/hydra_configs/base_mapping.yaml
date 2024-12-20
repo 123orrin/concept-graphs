@@ -38,7 +38,7 @@ semantic_threshold: 0.5 #
 physical_threshold: 0.5 #
 # Only when match_method=="sim_sum"
 #sim_threshold: 1.2
-sim_threshold: 1.2 #fuxiao critical, c
+sim_threshold: 1.0 #fuxiao critical, c
 
 # For contain_number
 use_contain_number: !!bool False

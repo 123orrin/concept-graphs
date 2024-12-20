@@ -459,8 +459,8 @@ def main(cfg : DictConfig):
     counter = 0
     frame_idx = -1
 
-    # start_time = time.time()  # Start the timer
-    # max_duration = 30  # Maximum duration in seconds
+    start_time = time.time()  # Start the timer
+    max_duration = 45  # Maximum duration in seconds
 
     node = Subscriber()
     # query_service_node = QueryNode()
@@ -468,10 +468,10 @@ def main(cfg : DictConfig):
     # query_service_node._attach_tokenizer(clip_tokenizer)
     # query_service_node._attach_objects(objects)
     while rclpy.ok():
-        # elapsed_time = time.time() - start_time  # Calculate elapsed time
-        # if elapsed_time >= max_duration:
-        #     print(f"Stopping script after {max_duration} seconds.")
-        #     break  # Exit the loop
+        elapsed_time = time.time() - start_time  # Calculate elapsed time
+        if elapsed_time >= max_duration:
+            print(f"Stopping script after {max_duration} seconds.")
+            break  # Exit the loop
         
 
 

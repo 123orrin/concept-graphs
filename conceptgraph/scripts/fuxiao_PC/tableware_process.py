@@ -2,7 +2,7 @@ import open3d as o3d
 import os
 
 # Path to the bowl.ply file
-exp_id = 'tableware_4_17'  # Change this if your exp_id is different
+exp_id = 'tableware_5_12'  # Change this if your exp_id is different
 file_directory = '/home/fuxiao/Projects/Orbbec/concept-graphs/conceptgraph/dataset/external/'  # Base directory
 bowl_ply_path = os.path.join(file_directory, exp_id, 'exps', 'exp_default', f"{exp_id}_bowl.ply")
 
@@ -49,7 +49,7 @@ def downsample_point_cloud(pcd, voxel_size=0.01):
 
 
 # Apply denoising
-denoised_bowl = denoise_point_cloud_sor(bowl_point_cloud, nb_neighbors=200, std_ratio=0.2)
+denoised_bowl = denoise_point_cloud_sor(bowl_point_cloud, nb_neighbors=400, std_ratio=0.009)
 print(f"Denoised Point cloud has {len(denoised_bowl.points)} points.")
 # Save the denoised point cloud (optional)
 denoised_ply_path = os.path.join(file_directory, exp_id, 'exps', 'exp_default', f"{exp_id}_bowl_denoised.ply")

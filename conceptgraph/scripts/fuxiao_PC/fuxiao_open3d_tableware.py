@@ -11,7 +11,7 @@ import threading
 
 
 # Path to the file
-exp_id  = 'tableware_4_17'
+exp_id  = 'tableware_5_12'
 source_path = f'/home/fuxiao/Projects/Orbbec/concept-graphs/conceptgraph/dataset/external/{exp_id}/exps/exp_default/pcd_exp_default.pkl.gz'
 print(source_path)
 
@@ -49,7 +49,7 @@ for obj in data['objects']:
         legend_info[class_name] = inst_color
 
     # If class_name is 'bowl', store its pcd_np for later
-    if class_name == 'bowl':
+    if class_name == 'cup':
         bowl_pcds.append(pcd_np)
 
 # Combine all points and colors into single arrays
