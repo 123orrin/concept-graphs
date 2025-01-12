@@ -883,7 +883,6 @@ def main(ral_revision, args, debug_transform=False):
 
         for bbox in bboxes:
             vis.remove_geometry(bbox)
-            print("Transforming bbox :" , bbox)
 
         # draw a frame at the origin for reference
         frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
