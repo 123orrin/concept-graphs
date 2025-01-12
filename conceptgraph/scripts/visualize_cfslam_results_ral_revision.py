@@ -1,5 +1,6 @@
 import cv2
 import os
+import gc
 # import PyQt5
 
 # # Set the QT_QPA_PLATFORM_PLUGIN_PATH environment variable
@@ -31,6 +32,8 @@ from conceptgraph.utils.pointclouds import Pointclouds
 from conceptgraph.slam.slam_classes import MapObjectList
 from conceptgraph.utils.vis import LineMesh
 from conceptgraph.slam.utils import filter_objects, merge_objects
+
+from conceptgraph.scripts.gpt_object_classes import object_classes as ext_scannet_classes
 
 
 def interpolate_missing_properties(df_source, df_query, k_nearest=3):
@@ -404,10 +407,119 @@ def main(ral_revision, args, debug_transform=False):
 
         if query:
             return max_prob_idx, pcds[max_prob_idx], max_prob_object['bbox']
-            
+
     def save_view_params(vis):
         param = vis.get_view_control().convert_to_pinhole_camera_parameters()
         o3d.io.write_pinhole_camera_parameters("temp.json", param)
+
+    def encode_text_batches(text_queries, clip_model, clip_tokenizer, batch_size=16, device="cuda"):
+        """
+        Memory-efficient batch encoding of text queries using CLIP.
+        
+        Args:
+            text_queries: List of text queries to encode
+            clip_model: CLIP model instance
+            clip_tokenizer: CLIP tokenizer instance
+            batch_size: Number of queries to process at once
+            device: Device to run encoding on ("cuda" or "cpu")
+        
+        Returns:
+            torch.Tensor: Concatenated text features
+        """
+        text_query_fts = []
+        num_batches = (len(text_queries) + batch_size - 1) // batch_size
+
+        for batch_id, i in enumerate(range(0, len(text_queries), batch_size)):
+            print(f"Processing batch {batch_id + 1} of {num_batches}")
+            
+            # Move model to CPU temporarily if memory is critical
+            # clip_model.to("cpu")
+            # torch.cuda.empty_cache()
+            # clip_model.to(device)
+            
+            batch_queries = text_queries[i:i + batch_size]
+            
+            with torch.cuda.amp.autocast(enabled=True), torch.no_grad():
+                # Tokenize and encode in the same context
+                text_queries_tokenized = clip_tokenizer(batch_queries).to(device)
+                text_query_ft = clip_model.encode_text(text_queries_tokenized)
+                
+                # Convert to CPU and append
+                text_query_fts.append(text_query_ft.cpu())
+                
+                # Explicit cleanup
+                del text_queries_tokenized
+                del text_query_ft
+                torch.cuda.empty_cache()
+                gc.collect()
+        
+        # Concatenate all features on CPU to avoid GPU memory issues
+        final_features = torch.cat(text_query_fts, dim=0)
+        
+        return final_features
+
+    def classify(vis, batch_size=16, top_n=5, debug=False):
+        if args.no_clip:
+            print("CLIP model is not initialized.")
+            return
+
+        text_queries = ext_scannet_classes
+
+        # encode the text queries in batches
+        text_query_fts = encode_text_batches(text_queries, clip_model, clip_tokenizer, batch_size=batch_size)
+        text_query_fts = text_query_fts / text_query_fts.norm(dim=-1, keepdim=True)
+        text_query_fts = text_query_fts.to("cuda")
+        
+        # similarities = objects.compute_similarities(text_query_ft)
+        objects_clip_fts = objects.get_stacked_values_torch("clip_ft")
+        objects_clip_fts = objects_clip_fts.to("cuda")
+        
+        print()
+        num_objects = len(objects)
+        object_classes_dict = {}
+        for object_id in range(num_objects):
+            similarities = F.cosine_similarity(text_query_fts, objects_clip_fts[object_id, :].unsqueeze(0), dim=-1)
+            max_value = similarities.max()
+            min_value = similarities.min()
+            normalized_similarities = (similarities - min_value) / (max_value - min_value)
+            probs = F.softmax(similarities, dim=0)
+            
+            top_n_probs, top_n_indices = torch.topk(probs, top_n)
+
+            object_classes_dict[object_id] = {
+                "class_name": objects[object_id]['class_name'],
+                "top_n_probs": top_n_probs,
+                "top_n_indices": top_n_indices
+            }
+            object_classes_dict[object_id]["top_n_classes"] = [] 
+            # Print the top n classes
+            print(f"Object {object_id} with class name '{objects[object_id]['class_name']}'")
+            for i in range(top_n):
+                class_name = text_queries[top_n_indices[i]]
+                print(f"Top {i + 1} class: '{class_name}' with probability {top_n_probs[i].item()}")
+                object_classes_dict[object_id][f"top_n_classes"].append((i, class_name))
+            print()
+
+            if debug:
+                # Highlight the object of interest in red
+                pcd = pcds[object_id]
+                map_colors = np.asarray(pcd.colors)
+                pcd.colors = o3d.utility.Vector3dVector(
+                    np.tile([1.0, 0.0, 0.0], (len(pcd.points), 1))
+                )
+
+                # Turn the other objects to gray
+                for i in range(num_objects):
+                    if i == object_id:
+                        continue
+                    pcd = pcds[i]
+                    pcd.colors = o3d.utility.Vector3dVector(
+                        np.tile([0.5, 0.5, 0.5], (len(pcd.points), 1))
+                    )
+
+                o3d.visualization.draw_geometries(pcds)
+        
+        return object_classes_dict
 
     def find_desk(vis, query="desk", debug=True):
         max_prob_idx, max_pcd, max_bbox = color_by_clip_sim(vis, query=query)
@@ -480,12 +592,48 @@ def main(ral_revision, args, debug_transform=False):
 
         return max_pcd
 
-    def identify_robot_transformation(vis, debug=False, y_axis_first=False):
+    def get_robot_pcd_from_classification(object_classes_dict):
+        queries = ["robot", "robot arm"]
+        robot_ids = []
+
+        for object_id in object_classes_dict:
+            obj = object_classes_dict[object_id]
+            top_n_classes = obj["top_n_classes"]
+            for i, class_name in top_n_classes:
+                # Only consider the first class
+                if i > 0:
+                    break
+
+                if class_name in queries:
+                    robot_ids.append(object_id)
+                    break
+
+        if len(robot_ids) == 0:
+            print("No robot found.")
+            return None
+
+        robot_pcd = o3d.geometry.PointCloud()
+        for robot_id in robot_ids:
+            pcd = objects[robot_id]["pcd"]
+            robot_pcd += pcd
+
+        return robot_pcd
+
+    def get_robot_pcd(vis, object_classes_dict):
+        robot_pcd = get_robot_pcd_from_classification(object_classes_dict)
+        if robot_pcd is None:
+            robot_pcd = find_robot(vis, query="robot")
+
+        return robot_pcd
+
+    def identify_robot_transformation(vis, object_classes_dict, debug=False, y_axis_first=False):
+        print("Identifying desk")
         # First step: Find the desk and its planes
         oboxes, _ = find_desk(vis, debug=False)
 
+        print("Getting robot pointcloud")
         # Second step: Find the robot
-        robot_pcd = find_robot(vis, query="robot")
+        robot_pcd = get_robot_pcd(vis, object_classes_dict)
 
         # Third step: Determine the distance of all robot points to the desk planes
         distances = []
@@ -725,7 +873,10 @@ def main(ral_revision, args, debug_transform=False):
     # get_microwave(microwave_pcd_dir)
 
     if ral_revision:
-        T_OR = identify_robot_transformation(vis, debug=debug_transform)
+        debug_classificatin = False
+        object_classes_dict = classify(vis, debug=debug_classificatin)
+
+        T_OR = identify_robot_transformation(vis, object_classes_dict, debug=debug_transform)
 
         for geometry in pcds:
             geometry.transform(T_OR)
