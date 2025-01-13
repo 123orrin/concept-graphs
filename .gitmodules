@@ -1,0 +1,3 @@
+[submodule "conceptgraph/superquadric_fitting"]
+	path = conceptgraph/superquadric_fitting
+	url = git@github.com:lukasbrunke/EMS-superquadric_fitting_private.git
