@@ -36,7 +36,7 @@ from conceptgraph.slam.utils import filter_objects, merge_objects
 from conceptgraph.scripts.gpt_object_classes import object_classes as ext_scannet_classes
 from conceptgraph.scripts.llm_prompting import required_semantic_safety_constraints
 from conceptgraph.scripts.prompts import semantic_types, constraint_types
-
+from conceptgraph.scripts.clip_text_cache import CLIPTextCache
 
 
 def interpolate_missing_properties(df_source, df_query, k_nearest=3):
@@ -126,6 +126,9 @@ def load_result(result_path):
         raise ValueError("Results should be a dictionary! other types are not supported!")
     
     objects = MapObjectList()
+    detected_classes = [obj["class_name"] for obj in results["objects"]]
+    detected_classes.sort()
+    print(detected_classes)
     objects.load_serializable(results["objects"])
     bg_objects = MapObjectList()
     bg_objects.extend(obj for obj in objects if obj['is_background'])
@@ -462,6 +465,26 @@ def main(ral_revision, args, debug_transform=False):
         final_features = torch.cat(text_query_fts, dim=0)
         
         return final_features
+    
+    def get_text_embeddings(text_queries, clip_model, clip_tokenizer, batch_size=32, cache_dir="./clip_cache"):
+        """Main function to get text embeddings with caching."""
+        # Initialize cache
+        cache = CLIPTextCache(cache_dir)
+        
+        # Try to get cached embeddings
+        cached_embeddings = cache.get_cached_embeddings(text_queries)
+        if cached_embeddings is not None:
+            return cached_embeddings.to("cuda")
+        
+        # If not cached, compute embeddings
+        text_query_fts = encode_text_batches(text_queries, clip_model, clip_tokenizer, batch_size=batch_size)
+        text_query_fts = text_query_fts / text_query_fts.norm(dim=-1, keepdim=True)
+        
+        # Cache the results before moving to GPU
+        cache.cache_embeddings(text_queries, text_query_fts.cpu())
+        
+        # Return GPU tensor
+        return text_query_fts.to("cuda")
 
     def classify(vis, batch_size=16, top_n=5, debug=False):
         if args.no_clip:
@@ -471,9 +494,9 @@ def main(ral_revision, args, debug_transform=False):
         text_queries = ext_scannet_classes
 
         # encode the text queries in batches
-        text_query_fts = encode_text_batches(text_queries, clip_model, clip_tokenizer, batch_size=batch_size)
-        text_query_fts = text_query_fts / text_query_fts.norm(dim=-1, keepdim=True)
-        text_query_fts = text_query_fts.to("cuda")
+        text_query_fts = get_text_embeddings(text_queries, clip_model, clip_tokenizer, 
+                                             batch_size=batch_size, 
+                                             cache_dir="conceptgraph/dataset/clip_cache")
         
         # similarities = objects.compute_similarities(text_query_ft)
         objects_clip_fts = objects.get_stacked_values_torch("clip_ft")
@@ -887,23 +910,23 @@ def main(ral_revision, args, debug_transform=False):
                                                                    repetitions=1, 
                                                                    debug=True)
 
-        T_OR = identify_robot_transformation(vis, object_classes_dict, debug=debug_transform)
+        # T_OR = identify_robot_transformation(vis, object_classes_dict, debug=debug_transform)
 
-        for geometry in pcds:
-            geometry.transform(T_OR)
+        # for geometry in pcds:
+        #     geometry.transform(T_OR)
 
-        for bbox in bboxes:
-            vis.remove_geometry(bbox)
+        # for bbox in bboxes:
+        #     vis.remove_geometry(bbox)
 
-        # draw a frame at the origin for reference
-        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
-        vis.add_geometry(frame)
+        # # draw a frame at the origin for reference
+        # frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
+        # vis.add_geometry(frame)
 
-        # Save the transformed point clouds of the scene to a ply file
-        print(os.path.realpath(result_path))
-        filename = os.path.realpath(result_path).split(".")[0].split(".")[0]
-        for i, pcd in enumerate(pcds):
-            o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
+        # # Save the transformed point clouds of the scene to a ply file
+        # print(os.path.realpath(result_path))
+        # filename = os.path.realpath(result_path).split(".")[0].split(".")[0]
+        # for i, pcd in enumerate(pcds):
+        #     o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
 
     else:
         # Color the object based on RGB
