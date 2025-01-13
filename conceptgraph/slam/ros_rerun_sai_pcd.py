@@ -18,7 +18,9 @@ import scipy.ndimage as ndi
 import torch
 from PIL import Image
 from tqdm import trange
-from open3d.io import read_pinhole_camera_parameters
+from open3d.io import read_pinhole_camera_parameters, write_point_cloud
+from open3d.geometry import PointCloud
+from open3d.utility import Vector3dVector
 import hydra
 from omegaconf import DictConfig
 import open_clip
@@ -107,7 +109,7 @@ import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
 
 class Subscriber(Node):
-    def __init__(self):
+    def __init__(self, global_pc=False):
         super().__init__('subscriber')
 
         self.sub_color = self.create_subscription(ROSImage, 'spectacular_ai/color_image', self.color_callback, 10)
@@ -115,7 +117,7 @@ class Subscriber(Node):
         self.sub_info = self.create_subscription(CameraInfo, 'spectacular_ai/camera_info', self.info_callback, 10)
         self.sub_pose = self.create_subscription(PoseStamped, 'spectacular_ai/pose_image_synced', self.pose_callback, 10)
         self.sub_pc = self.create_subscription(PointCloud2, 'spectacular_ai/point_cloud/local', self.pc_callback, 10)
-
+        
         self.color_msg = None
         self.depth_msg = None
         self.camera_msg = None
@@ -127,6 +129,12 @@ class Subscriber(Node):
         self.received_info = False
         self.received_pose = False
         self.received_pc = False
+        
+        self.global_pc = global_pc
+        if self.global_pc:
+            self.sub_pc_global = self.create_subscription(PointCloud2, 'spectacular_ai/point_cloud', self.pc_global_callback, 10)
+            self.pc_global_msg = None
+            self.received_pc_global = False
 
     def color_callback(self, msg):
         self.color_msg = msg
@@ -148,6 +156,10 @@ class Subscriber(Node):
         self.pc_msg = msg
         self.received_pc = True
 
+    def pc_global_callback(self, msg):
+        self.pc_global_msg = msg
+        self.received_pc_global = True
+
     def process_inputs(self, cfg, rotate=True, use_pc_for_depth=False):
         # Process all inputs
         color = self._process_color(cfg, rotate)
@@ -163,6 +175,12 @@ class Subscriber(Node):
         self.received_info = False
         self.received_pose = False
         self.received_pc = False
+        if self.global_pc:
+            global_pc = self._process_global_pc()
+
+            self.received_pc_global = False
+
+            return color, depth, intrinsics, pose, global_pc
         # Return processed inputs
         return color, depth, intrinsics, pose
     
@@ -282,6 +300,27 @@ class Subscriber(Node):
         intrinsics[:3, :3] = K
         intrinsics = intrinsics.to(cfg.device).type(torch.float)
         return intrinsics
+
+    def _process_global_pc(self):
+        # # Get data
+        # global_pc = point_cloud2.pointcloud2_to_array(self.pc_global_msg)
+
+        # extract rgb data from the point cloud 
+        dtype_list = point_cloud2.fields_to_dtype(self.pc_global_msg.fields, self.pc_global_msg.point_step)
+        # parse the cloud into an array
+        cloud_arr = np.frombuffer(self.pc_global_msg.data, dtype_list)
+
+        rgb_pcd = point_cloud2.split_rgb_field(cloud_arr)
+
+        global_pc = np.zeros((rgb_pcd.shape[0], 6))
+        global_pc[:, 0] = cloud_arr['x']
+        global_pc[:, 1] = cloud_arr['y']
+        global_pc[:, 2] = cloud_arr['z']
+        global_pc[:, 3] = rgb_pcd['r'] / 255.0
+        global_pc[:, 4] = rgb_pcd['g'] / 255.0
+        global_pc[:, 5] = rgb_pcd['b'] / 255.0
+
+        return global_pc
     
 # class QueryNode(Node):
 #     def __init__(self):
@@ -454,7 +493,7 @@ def main(cfg : DictConfig):
     counter = 0
     frame_idx = -1
 
-    node = Subscriber()
+    node = Subscriber(global_pc=cfg.save_global_pcd)
     # query_service_node = QueryNode()
     # query_service_node._attach_model(clip_model)
     # query_service_node._attach_tokenizer(clip_tokenizer)
@@ -477,10 +516,15 @@ def main(cfg : DictConfig):
             while not (node.received_color and node.received_depth and node.received_info and node.received_pose):
                 rclpy.spin_once(node, timeout_sec=0)
                 # rclpy.spin_once(query_service_node, timeout_sec=0)
-
-        color_tensor, depth_tensor, intrinsics, pose_tensor = node.process_inputs(cfg,
+        
+        if cfg.save_global_pcd:
+            color_tensor, depth_tensor, intrinsics, pose_tensor, global_pcd_npy = node.process_inputs(cfg,
                                                                                   rotate=cfg.rotate,
                                                                                   use_pc_for_depth=cfg.use_pc_for_depth)
+        else:
+            color_tensor, depth_tensor, intrinsics, pose_tensor = node.process_inputs(cfg,
+                                                                                    rotate=cfg.rotate,
+                                                                                    use_pc_for_depth=cfg.use_pc_for_depth)
         #color_tensor2, depth_tensor2, intrinsics2, *_ = dataset[frame_idx]
 
         # Read info about current frame from ROS
@@ -502,6 +546,10 @@ def main(cfg : DictConfig):
         if cfg.save_intrinsics and frame_idx == 0:              
             intrinsics_path = Path(cfg.intrinsics_path) / f"{frame_idx:06}.npy"
             save_paths.append(intrinsics_path)
+        # global point cloud
+        if cfg.save_global_pcd:
+            global_pcd_path = Path(cfg.global_pcd_path) / f"{frame_idx:06}.ply"
+            save_paths.append(global_pcd_path)
 
         for save_path in save_paths:
             # Check if path exists up to the file name
@@ -528,6 +576,13 @@ def main(cfg : DictConfig):
         if cfg.save_depth:
             # Saving the depth image in milimeters
             cv2.imwrite(str(depth_path), (depth_array * 1000).astype(np.uint16))    
+
+        if cfg.save_global_pcd:
+            global_pcd = PointCloud()
+            # import pdb; pdb.set_trace()
+            global_pcd.points = Vector3dVector(global_pcd_npy[:, :3])
+            global_pcd.colors = Vector3dVector(global_pcd_npy[:, 3:])
+            write_point_cloud(str(global_pcd_path), global_pcd)
         
         # do some sanity checks
         image_rgb = (color_np).astype(np.uint8) # (H, W, 3)
