@@ -101,6 +101,7 @@ office_objects = [  # Not solely office objects, but a mix of office, home, and 
 
 # specific_objects = ["robot", "robot arm", "microwave door", "microwave body", "balloon", "cabinet door"]
 specific_objects = ["robot", "robot arm", "microwave body", "balloon", "cabinet door"]
+# specific_objects = ["robot", "robot arm", "balloon", "cabinet door"]
 
 # Combine all object classes
 object_classes = scannet_objects + kitchen_objects + office_objects + specific_objects
@@ -112,3 +113,20 @@ object_classes = list(set(object_classes))
 object_classes.sort()
 
 print(f"Total number of object classes: {len(object_classes)}")
+
+
+if __name__ == "__main__":
+    import json
+    import random
+
+    # Save object classes to a .txt file. Sorted alphabetically and one class per line.
+    with open("conceptgraph/custom_classes.txt", "w") as file:
+        for obj_class in object_classes:
+            file.write(obj_class + "\n")
+
+    # Save object classes to a .json file with the class name as key and a random 
+    # RGB color (in the interval [0, 1]) as value. Sorted alphabetically.
+    object_classes_dict = {obj_class: [random.random(), random.random(), random.random()] for obj_class in object_classes}
+    
+    with open("conceptgraph/custom_classes_colors.json", "w") as file:
+        json.dump(object_classes_dict, file, indent=4)
