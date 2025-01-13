@@ -150,3 +150,4 @@ prompts = {"system": system_prompt,
            "pose": pose_prompts}
 
 semantic_types = ["spatial_relationship", "behavioral", "pose"]
+constraint_types = ["inside", "above", "below", "around"]

@@ -2,7 +2,7 @@ import random
 
 from openai import OpenAI
 
-from prompts import prompts, semantic_types
+from prompts import prompts, semantic_types, constraint_types
 
 
 client = OpenAI()
@@ -47,7 +47,7 @@ def is_safe(response):
         return None
 
 
-def majority_vote(expression, repetitions=3, max_retries=3):
+def majority_vote(expression, repetitions=3, max_retries=3, debug=False):
     assert repetitions % 2 == 1, "Repetitions must be an odd number."
 
     votes = []
@@ -64,9 +64,36 @@ def majority_vote(expression, repetitions=3, max_retries=3):
                     exit()
         votes.append(vote)
 
-    print(votes)
+    if debug:
+        print(votes)
 
     return votes.count(True) > votes.count(False)
+
+
+def required_semantic_safety_constraints(ee_objects, semantic_types, scene_objects, constraint_types, repetitions, debug=False):
+    semantic_safety = []
+    for ee_object in ee_objects:
+        for semantic_type in semantic_types:
+            for scene_object in scene_objects:
+                for constraint_type in constraint_types:
+                    is_semantically_safe = majority_vote(semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=semantic_type, debug=debug), repetitions)
+                    print("Majority vote: ", is_semantically_safe)
+                    if not semantic_type == "spatial_relationship":
+                        if semantic_type == "behavioral":
+                            if not is_semantically_safe:
+                                semantic_safety.append((ee_object, semantic_type, scene_object))
+                        break
+                    else:
+                        if not is_semantically_safe:
+                            semantic_safety.append((ee_object, semantic_type, scene_object, constraint_type))
+                if semantic_type == "pose":
+                    if not is_semantically_safe:
+                        semantic_safety.append((ee_object, semantic_type))
+                    break
+
+    print("Required semantic safety constraints: ", semantic_safety)
+
+    return semantic_safety
 
 
 # For debugging purposes
@@ -78,7 +105,7 @@ def true_or_false():
 
 
 if __name__ == "__main__":
-    quick_test = True
+    quick_test = False
 
     if quick_test:
         # semantic_type = "behavioral"
@@ -104,22 +131,25 @@ if __name__ == "__main__":
     else:
         semantic_types = ["spatial_relationship", "behavioral", "pose"]
         # constraint_types = ["above", "below", "around"]
-        constraint_types = ["above", "below", "around", "inside"]
+        # constraint_types = ["above", "below", "around", "inside"]
 
         ee_objects = ["cup of water", "dry sponge"]
-        scene_objects = ["laptop", "books", "paper towel"]
+        # scene_objects = ["laptop", "books", "paper towel"]
+        scene_objects = ["laptop", "books"]
 
-        for ee_object in ee_objects:
-            print(f"End effector object: {ee_object}")
-            for semantic_type in semantic_types:
-                print(f"Semantic type: {semantic_type}")
-                for scene_object in scene_objects:
-                    print(f"Scene object: {scene_object}")
-                    for constraint_type in constraint_types:
-                        print(f"Constraint type: {constraint_type}")
-                        is_semantically_safe = majority_vote(semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=semantic_type, debug=True))
-                        print("Majority vote: ", is_semantically_safe)
-                        if not semantic_type == "spatial_relationship":
-                            break
-                    if semantic_type == "pose":
-                        break
+        semantic_safety = required_semantic_safety_constraints(ee_objects, semantic_types, scene_objects, constraint_types, repetitions=1, debug=True)
+
+        # for ee_object in ee_objects:
+        #     print(f"End effector object: {ee_object}")
+        #     for semantic_type in semantic_types:
+        #         print(f"Semantic type: {semantic_type}")
+        #         for scene_object in scene_objects:
+        #             print(f"Scene object: {scene_object}")
+        #             for constraint_type in constraint_types:
+        #                 print(f"Constraint type: {constraint_type}")
+        #                 is_semantically_safe = majority_vote(semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=semantic_type, debug=True))
+        #                 print("Majority vote: ", is_semantically_safe)
+        #                 if not semantic_type == "spatial_relationship":
+        #                     break
+        #             if semantic_type == "pose":
+        #                 break

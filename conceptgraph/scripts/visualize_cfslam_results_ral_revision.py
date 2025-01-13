@@ -34,6 +34,9 @@ from conceptgraph.utils.vis import LineMesh
 from conceptgraph.slam.utils import filter_objects, merge_objects
 
 from conceptgraph.scripts.gpt_object_classes import object_classes as ext_scannet_classes
+from conceptgraph.scripts.llm_prompting import required_semantic_safety_constraints
+from conceptgraph.scripts.prompts import semantic_types, constraint_types
+
 
 
 def interpolate_missing_properties(df_source, df_query, k_nearest=3):
@@ -105,6 +108,8 @@ def get_parser():
     parser.add_argument("--merge_text_sim_thresh", type=float, default=-1)
     parser.add_argument("--obj_min_points", type=int, default=0)
     parser.add_argument("--obj_min_detections", type=int, default=0)
+
+    parser.add_argument("--ee_object", type=str, default=None)
     
     return parser
 
@@ -593,7 +598,7 @@ def main(ral_revision, args, debug_transform=False):
         return max_pcd
 
     def get_robot_pcd_from_classification(object_classes_dict):
-        queries = ["robot", "robot arm"]
+        robot_queries = ["robot", "robot arm"]
         robot_ids = []
 
         for object_id in object_classes_dict:
@@ -604,7 +609,7 @@ def main(ral_revision, args, debug_transform=False):
                 if i > 0:
                     break
 
-                if class_name in queries:
+                if class_name in robot_queries:
                     robot_ids.append(object_id)
                     break
 
@@ -846,35 +851,41 @@ def main(ral_revision, args, debug_transform=False):
 
         return T_OR
 
-    
-    def get_microwave(path):
-        # draw a frame at the origin for reference
-        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
-        vis.add_geometry(frame)
+    def object_labels(object_classes_dict):
+        robot_queries = ["robot", "robot arm"]
+        scene_objects = {}
 
-        queries = ["door", "microwave body"]
+        for object_id in object_classes_dict:
+            obj = object_classes_dict[object_id]
+            top_n_classes = obj["top_n_classes"]
+            for i, class_name in top_n_classes:
+                # Only consider the first class
+                if i > 0:
+                    break
 
-        for query in queries:
-            max_prob_idx, max_pcd, max_bbox = color_by_clip_sim(vis, query=query)
-            print("Most probable object is at index", max_prob_idx)
-            print("max pcd:", max_pcd)
-            print("max bbox:", max_bbox)
+                if not class_name in robot_queries:
+                    scene_objects[object_id] = class_name
 
-            # replace any spaces with underscores in the query
-            query = query.replace(" ", "_")
+        print(scene_objects)
 
-            # Save the max_pcd to a ply file
-            o3d.io.write_point_cloud(os.path.join(path, "microwave_{}.ply".format(query)), max_pcd)
-    
-    # scene_path = Path(os.path.realpath(result_path)).parents[2]
-    # microwave_pcd_dir = scene_path / "microwave_pcd"
-    # if not os.path.exists(microwave_pcd_dir):
-    #     os.makedirs(microwave_pcd_dir)
-    # get_microwave(microwave_pcd_dir)
+        return scene_objects
 
     if ral_revision:
-        debug_classificatin = False
-        object_classes_dict = classify(vis, debug=debug_classificatin)
+        debug_classification = False
+        object_classes_dict = classify(vis, debug=debug_classification)
+
+        scene_objects = object_labels(object_classes_dict)
+        scene_objects_wo_duplicates = list(set(scene_objects.values()))
+        print(scene_objects_wo_duplicates)
+
+        if args.ee_object is not None:
+            ee_object = args.ee_object
+            semantic_safety = required_semantic_safety_constraints([ee_object], 
+                                                                   semantic_types, 
+                                                                   scene_objects_wo_duplicates, 
+                                                                   constraint_types, 
+                                                                   repetitions=1, 
+                                                                   debug=True)
 
         T_OR = identify_robot_transformation(vis, object_classes_dict, debug=debug_transform)
 

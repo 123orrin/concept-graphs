@@ -99,7 +99,8 @@ office_objects = [  # Not solely office objects, but a mix of office, home, and 
     'work lamp', 'meeting table', 'drawer pull', 'storage box', 'USB drive holder', 'electronic lock', 'laptop sleeve', 'pocket organizer'
 ]
 
-specific_objects = ["robot", "robot arm", "microwave door", "microwave body", "balloon", "cabinet door"]
+# specific_objects = ["robot", "robot arm", "microwave door", "microwave body", "balloon", "cabinet door"]
+specific_objects = ["robot", "robot arm", "microwave body", "balloon", "cabinet door"]
 
 # Combine all object classes
 object_classes = scannet_objects + kitchen_objects + office_objects + specific_objects
