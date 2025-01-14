@@ -959,6 +959,102 @@ def main(ral_revision, args, debug_transform=False):
         print(scene_objects)
 
         return scene_objects
+    
+    def merge_objects():
+        new_objects = {}
+        new_obj_id = 0
+        num_objects = len(objects)
+        for object_id, obj in enumerate(objects):
+            print(f"Object {object_id}: {obj['class_name']}")
+
+            # Highlight the object of interest in red
+            pcd = pcds[object_id]
+            map_colors = np.asarray(pcd.colors)
+            pcd.colors = o3d.utility.Vector3dVector(
+                np.tile([1.0, 0.0, 0.0], (len(pcd.points), 1))
+            )
+
+            # Turn the other objects to gray
+            for i in range(num_objects):
+                if i == object_id:
+                    continue
+                pcd = pcds[i]
+                pcd.colors = o3d.utility.Vector3dVector(
+                    np.tile([0.5, 0.5, 0.5], (len(pcd.points), 1))
+                )
+
+            o3d.visualization.draw_geometries(pcds)
+
+            # Check if new_objects is empty
+            if len(new_objects) == 0:
+                keep_obj = input("Do you want to keep this object? (y/n): ")
+                if keep_obj == "y":
+                    keep_class_name = input("Do you want to keep the class name of the new object? (y/n): ")
+                    if  keep_class_name == "y":
+                        class_name = obj["class_name"]
+                    else:
+                        class_name = input("Enter the new class name: ")
+                    new_objects[new_obj_id] = {
+                        "obj": obj["pcd"],
+                        # "bbox": obj["bbox"],
+                        "class_name": class_name
+                    }
+                    new_obj_id += 1
+
+                continue
+
+            merge = input("Do you want to merge this object with another object? (y/n): ")
+            if merge == "y":
+                print("Current objects:")
+                for existing_obj_id, new_obj in new_objects.items():
+                    print(f"Object {existing_obj_id}: {new_obj['class_name']}")
+                
+                merge_id = int(input("Enter the object id to merge with: "))
+                new_objects[merge_id]["obj"] += obj["pcd"]
+            else:
+                keep_obj = input("Do you want to keep this object? (y/n): ")
+                if keep_obj == "y":
+                    keep_class_name = input("Do you want to keep the class name of the new object? (y/n): ")
+                    if  keep_class_name == "y":
+                        class_name = obj["class_name"]
+                    else:
+                        class_name = input("Enter the new class name: ")
+                    new_objects[new_obj_id] = {
+                        "obj": obj["pcd"],
+                        "class_name": class_name
+                    }
+                    new_obj_id += 1
+
+        print()
+        print("New objects:")
+        num_new_obj = len(new_objects)
+        new_pcds = []
+        for new_obj_id, new_obj in new_objects.items():
+            print(f"Object {new_obj_id}/ {num_new_obj - 1}: {new_obj['class_name']}")
+
+            pcd = new_obj["obj"]
+
+            map_colors = np.asarray(pcd.colors)
+            pcd.colors = o3d.utility.Vector3dVector(
+                np.tile([1.0, 0.0, 0.0], (len(pcd.points), 1))
+            )
+
+            new_pcds.append(pcd)
+
+            # Turn the other objects to gray
+            for i in range(num_new_obj):
+                if i == new_obj_id:
+                    continue
+                pcd = new_objects[i]["obj"]
+                pcd.colors = o3d.utility.Vector3dVector(
+                    np.tile([0.5, 0.5, 0.5], (len(pcd.points), 1))
+                )
+
+                new_pcds.append(pcd)            
+
+            o3d.visualization.draw_geometries(new_pcds)
+
+        return new_objects
 
     if ral_revision:
         debug_classification = False
@@ -967,6 +1063,12 @@ def main(ral_revision, args, debug_transform=False):
         scene_objects = object_labels(object_classes_dict)
         scene_objects_wo_duplicates = list(set(scene_objects.values()))
         print(scene_objects_wo_duplicates)
+
+        manual_merging = True
+        if manual_merging:
+            # Merge the objects manually
+            merged_objects = merge_objects()
+            scene_objects_wo_duplicates = list(set([obj["class_name"] for obj in merged_objects.values()]))
 
         if args.ee_object is not None:
             ee_object = args.ee_object
@@ -992,8 +1094,17 @@ def main(ral_revision, args, debug_transform=False):
         # Save the transformed point clouds of the scene to a ply file
         print(os.path.realpath(result_path))
         filename = os.path.realpath(result_path).split(".")[0].split(".")[0]
-        for i, pcd in enumerate(pcds):
-            o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
+        if manual_merging:
+            for obj_id, obj in merged_objects.items():
+                pcd = obj["obj"]
+                pcd.transform(T_OR)  # transform the point cloud
+                class_name = obj["class_name"]
+                # Remove spaces from the class name
+                class_name = class_name.replace(" ", "_")
+                o3d.io.write_point_cloud("{}_{}_{}.ply".format(filename, obj_id, class_name), pcd)
+        else:
+            for i, pcd in enumerate(pcds):
+                o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
 
     else:
         # Color the object based on RGB
