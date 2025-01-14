@@ -14,6 +14,7 @@ import pickle
 import gzip
 import argparse
 from pathlib import Path
+from itertools import combinations
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -579,6 +580,8 @@ def main(ral_revision, args, debug_transform=False):
 
         print("Detected {} patches".format(len(oboxes)))
 
+        assert (len(oboxes) >= 3) # we need at least 3 planes to form a box
+
         geometries = []
         entities = [max_pcd]
         planes = []
@@ -654,6 +657,46 @@ def main(ral_revision, args, debug_transform=False):
 
         return robot_pcd
 
+    def find_closest_orthogonal_basis(normals):
+        """
+        Find the three plane normals that are closest to forming an orthogonal basis.
+        
+        Parameters:
+        normals: numpy array of shape (n, 3) where n is the number of plane normals
+        
+        Returns:
+        best_basis: indices of the three normals that best form an orthogonal basis
+        orthogonality_score: measure of how close to orthogonal (lower is better)
+        """
+        # Normalize all vectors
+        normals = normals / np.linalg.norm(normals, axis=1)[:, np.newaxis]
+        
+        # Get all possible combinations of three normals
+        n = len(normals)
+        combinations_of_three = list(combinations(range(n), 3))
+        
+        best_score = float('inf')
+        best_basis = None
+        
+        for combo in combinations_of_three:
+            # Get the three vectors
+            v1, v2, v3 = normals[list(combo)]
+            
+            # Calculate dot products between all pairs
+            dot12 = np.abs(np.dot(v1, v2))
+            dot23 = np.abs(np.dot(v2, v3))
+            dot13 = np.abs(np.dot(v1, v3))
+            
+            # For perfectly orthogonal vectors, all dot products would be 0
+            # Sum the absolute values of dot products as our score
+            score = dot12 + dot23 + dot13
+            
+            if score < best_score:
+                best_score = score
+                best_basis = combo
+                
+        return best_basis, best_score
+
     def identify_robot_transformation(vis, object_classes_dict, debug=False, y_axis_first=False):
         print("Identifying desk")
         # First step: Find the desk and its planes
@@ -696,6 +739,19 @@ def main(ral_revision, args, debug_transform=False):
         table_top_plane_id = np.argmin(thresholds)
         table_top_plane = planes[table_top_plane_id]
         table_top_bbox = oboxes[table_top_plane_id]
+
+        if len(planes) > 3:
+            print("More than 3 planes detected. Selecting the 3 planes that are most orthogonal.")
+            normals = np.array([plane[0] for plane in planes])
+            best_indices, score = find_closest_orthogonal_basis(normals)
+
+            print(f"Best basis indices: {best_indices}")
+            print(f"Orthogonality score (lower is better): {score:.6f}")
+            print("\nSelected vectors:")
+            for idx in best_indices:
+                print(f"Vector {idx}: {normals[idx]}")
+
+            assert table_top_plane_id in best_indices # The table top plane should be one of the selected planes
         
         # Determine the transformation matrix for the table top
         T_table_top = np.eye(4)
@@ -728,7 +784,10 @@ def main(ral_revision, args, debug_transform=False):
 
         # Fifth step: Find the bottom of the robot
         # The points that are closer than the threshold to the table top plane are the bottom of the robot and define the center of the robot base
-        bottom_points = np.asarray(robot_pcd.points)[np.where(distances[table_top_plane_id] < thresholds[table_top_plane_id])]
+        # bottom_points = np.asarray(robot_pcd.points)[np.where(distances[table_top_plane_id] < thresholds[table_top_plane_id])]
+        # Using the points that are between 0.15 and 0.25 meters from the table top plane as the bottom of the robot
+        # as the base has a larger support area that is not centered at the center of the first joint.  
+        bottom_points = np.asarray(robot_pcd.points)[np.where((0.15 <= distances[table_top_plane_id]) & (distances[table_top_plane_id] <= 0.25))]
         bottom_center = np.mean(bottom_points, axis=0)
 
         # Project the bottom center to the table top plane
@@ -766,14 +825,20 @@ def main(ral_revision, args, debug_transform=False):
         z_axis = normal   
 
         median_distances = {}
+        table_side_plane_id = None
         if y_axis_first:
-            minimum_median_distance_id = None
             minimum_median_distance = float('inf')
         else:
-            maximum_median_distance_id = None
             maximum_median_distance = 0.0
+
         for threshold_id, threshold in enumerate(thresholds):
+            print("Threshold: ", threshold)
             if threshold_id == table_top_plane_id:
+                print("Skipping table top plane")
+                continue
+
+            if not threshold_id in best_indices:
+                print("Skipping non-orthogonal plane")
                 continue
 
             dist = distances[threshold_id]
@@ -785,11 +850,11 @@ def main(ral_revision, args, debug_transform=False):
             if y_axis_first:
                 if threshold < minimum_median_distance:
                     minimum_median_distance = threshold
-                    minimum_median_distance_id = threshold_id
+                    table_side_plane_id = threshold_id
             else:
                 if threshold > maximum_median_distance:
                     maximum_median_distance = threshold
-                    maximum_median_distance_id = threshold_id
+                    table_side_plane_id = threshold_id
 
             if debug:
                 # plot a histogram of the distances
@@ -797,13 +862,6 @@ def main(ral_revision, args, debug_transform=False):
                 plt.axvline(x=threshold, linestyle='--')
                 plt.xlim(left=0.0)
                 plt.show()
-
-        if y_axis_first:
-            # The shorter median distance is the plane that is normal to the y-axis of the robot
-            table_side_plane_id = minimum_median_distance_id
-        else:
-            # The longer median distance is the plane that is normal to the x-axis of the robot
-            table_side_plane_id = maximum_median_distance_id
         
         table_side_plane = planes[table_side_plane_id]
 
@@ -833,14 +891,23 @@ def main(ral_revision, args, debug_transform=False):
         axis = table_side_plane[0]
 
         if not y_axis_first:
-            axis = -axis
+            # Check if more points are on the positive side of the plane 
+            offset = np.dot(robot_pcd.points - projected_center, axis)
+
+            if debug:
+                print("Offset mean: ", np.mean(offset))
+                # Plot a histogram of the offset
+                plt.hist(offset, bins=10)
+                plt.show()
+            
+            if np.mean(offset) > 0:
+                axis = -axis
 
         # Project the y axis to the table top plane
-        new_axis = axis + projected_center
-        axis = new_axis - (np.dot(new_axis, normal) + bias) / np.linalg.norm(normal) * normal - projected_center
+        axis = axis - np.dot(axis, z_axis) / np.linalg.norm(normal) * z_axis
 
         # Check if y_axis is in the plane
-        if np.abs(np.dot(axis + projected_center, normal) + bias) > 1e-6:
+        if np.abs(np.dot(axis, z_axis)) > 1e-6:
             print("Axis is not in the plane. Incorrect projection!")
 
         # The remaining axis is the cross product of the axis and the z axis
@@ -910,23 +977,23 @@ def main(ral_revision, args, debug_transform=False):
                                                                    repetitions=1, 
                                                                    debug=True)
 
-        # T_OR = identify_robot_transformation(vis, object_classes_dict, debug=debug_transform)
+        T_OR = identify_robot_transformation(vis, object_classes_dict, debug=debug_transform)
 
-        # for geometry in pcds:
-        #     geometry.transform(T_OR)
+        for geometry in pcds:
+            geometry.transform(T_OR)
 
-        # for bbox in bboxes:
-        #     vis.remove_geometry(bbox)
+        for bbox in bboxes:
+            vis.remove_geometry(bbox)
 
-        # # draw a frame at the origin for reference
-        # frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
-        # vis.add_geometry(frame)
+        # draw a frame at the origin for reference
+        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
+        vis.add_geometry(frame)
 
-        # # Save the transformed point clouds of the scene to a ply file
-        # print(os.path.realpath(result_path))
-        # filename = os.path.realpath(result_path).split(".")[0].split(".")[0]
-        # for i, pcd in enumerate(pcds):
-        #     o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
+        # Save the transformed point clouds of the scene to a ply file
+        print(os.path.realpath(result_path))
+        filename = os.path.realpath(result_path).split(".")[0].split(".")[0]
+        for i, pcd in enumerate(pcds):
+            o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
 
     else:
         # Color the object based on RGB
