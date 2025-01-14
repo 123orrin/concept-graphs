@@ -37,8 +37,8 @@ match_method: "sim_sum" # "sep_thresh", "sim_sum"
 semantic_threshold: 0.5
 physical_threshold: 0.5
 # Only when match_method=="sim_sum"
-#sim_threshold: 1.2
-sim_threshold: 0.7
+sim_threshold: 1.2
+# sim_threshold: 0.7
 
 # For contain_number
 use_contain_number: !!bool False
@@ -46,18 +46,25 @@ contain_area_thresh: 0.95
 contain_mismatch_penalty: 0.5
 
 # Selection criteria on the 2D masks
-mask_area_threshold: 25 # mask with pixel area less than this will be skipped
-mask_conf_threshold: 0.25 # mask with lower confidence score will be skipped
-max_bbox_area_ratio: 0.5 # boxes with larger areas than this will be skipped
+# TODO: mask_area_threshold should not be reliant on the sparse depth image
+# mask_area_threshold: 25 # mask with pixel area less than this will be skipped
+mask_area_threshold: 10
+# mask_conf_threshold: 0.25 # mask with lower confidence score will be skipped
+mask_conf_threshold: 0.15
+# max_bbox_area_ratio: 0.5 # boxes with larger areas than this will be skipped
+# max_bbox_area_ratio: 0.75
+max_bbox_area_ratio: 1.0
 
-min_points_threshold: 16 # projected and sampled pcd with less points will be skipped
+# min_points_threshold: 16 # projected and sampled pcd with less points will be skipped
+min_points_threshold: 4
 
 # point cloud processing
 obj_pcd_max_points: 5000 # Determines the maximum point count for object point clouds; exceeding this triggers downsampling to approx max points. Set to -1 to disable.
 downsample_voxel_size: 0.025
 dbscan_remove_noise: !!bool True
 dbscan_eps: 0.1
-dbscan_min_points: 10
+# dbscan_min_points: 10
+dbscan_min_points: 100
 
 # Selection criteria of the fused object point cloud
 obj_min_points: 0
@@ -65,8 +72,10 @@ obj_min_detections: 2
 
 # For merge_overlap_objects() function
 merge_overlap_thresh: 0.7      # -1 means do not perform the merge_overlap_objects()
-merge_visual_sim_thresh: 0.7   # Merge only if the visual similarity is larger
-merge_text_sim_thresh: 0.7     # Merge only if the text cosine sim is larger
+# merge_visual_sim_thresh: 0.7   # Merge only if the visual similarity is larger
+# merge_text_sim_thresh: 0.7     # Merge only if the text cosine sim is larger
+merge_visual_sim_thresh: 0.8   # Merge only if the visual similarity is larger
+merge_text_sim_thresh: 0.8    # Merge only if the text cosine sim is larger
 
 # Periodically perform post-process operations every k frame
 # -1 means not perform them during the run. They are performed at the end anyway. 
