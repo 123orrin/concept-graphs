@@ -1057,6 +1057,7 @@ def main(ral_revision, args, debug_transform=False):
         return new_objects
 
     if ral_revision:
+        z_offset = -0.025 # 2.5 cm offset of the robot above the table due to a metal plate
         debug_classification = False
         object_classes_dict = classify(vis, debug=debug_classification)
 
@@ -1064,11 +1065,31 @@ def main(ral_revision, args, debug_transform=False):
         scene_objects_wo_duplicates = list(set(scene_objects.values()))
         print(scene_objects_wo_duplicates)
 
-        manual_merging = True
+        manual_merging = False
         if manual_merging:
             # Merge the objects manually
             merged_objects = merge_objects()
             scene_objects_wo_duplicates = list(set([obj["class_name"] for obj in merged_objects.values()]))
+        else:
+            merged_objects = {}
+            print("Loading merged objects if available")
+            pcd_dir = os.path.realpath(result_path).split(".")[0].split(".")[0].rsplit("/", maxsplit=1)[0]
+            pcd_paths = os.listdir(pcd_dir)
+            pcd_paths = [pcd_path for pcd_path in pcd_paths if pcd_path.endswith(".ply") and not pcd_path[-5].isdigit()]
+
+            for pcd_path in pcd_paths:
+                obj_id_and_class = pcd_path.rsplit(".", maxsplit=1)[0].split("_", maxsplit=7)[-1]
+                obj_id, obj_class = obj_id_and_class.split("_", maxsplit=1)
+                obj_class = obj_class.replace("_", " ")
+                # print(obj_id, obj_class)
+
+                merged_objects[int(obj_id)] = {
+                    "obj": o3d.io.read_point_cloud(os.path.join(pcd_dir, pcd_path)),  # These are already transformed!
+                    "class_name": obj_class
+                }
+
+            scene_objects_wo_duplicates = list(set([obj["class_name"] for obj in merged_objects.values()]))
+            print(scene_objects_wo_duplicates)
 
         if args.ee_object is not None:
             ee_object = args.ee_object
@@ -1076,10 +1097,11 @@ def main(ral_revision, args, debug_transform=False):
                                                                    semantic_types, 
                                                                    scene_objects_wo_duplicates, 
                                                                    constraint_types, 
-                                                                   repetitions=1, 
+                                                                   repetitions=3, 
                                                                    debug=True)
 
         T_OR = identify_robot_transformation(vis, object_classes_dict, debug=debug_transform)
+        T_OR[:3, 3] += np.array([0, 0, z_offset])  # Move the robot in z with an offset since there is a metal plate on the table
 
         for geometry in pcds:
             geometry.transform(T_OR)
@@ -1092,20 +1114,16 @@ def main(ral_revision, args, debug_transform=False):
         vis.add_geometry(frame)
 
         # Save the transformed point clouds of the scene to a ply file
-        print(os.path.realpath(result_path))
-        filename = os.path.realpath(result_path).split(".")[0].split(".")[0]
         if manual_merging:
+            print(os.path.realpath(result_path))
+            filename = os.path.realpath(result_path).split(".")[0].split(".")[0]    
             for obj_id, obj in merged_objects.items():
                 pcd = obj["obj"]
                 pcd.transform(T_OR)  # transform the point cloud
                 class_name = obj["class_name"]
                 # Remove spaces from the class name
                 class_name = class_name.replace(" ", "_")
-                o3d.io.write_point_cloud("{}_{}_{}.ply".format(filename, obj_id, class_name), pcd)
-        else:
-            for i, pcd in enumerate(pcds):
-                o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
-
+                o3d.io.write_point_cloud("{}_transformed_merged_{}_{}.ply".format(filename, obj_id, class_name), pcd)
     else:
         # Color the object based on RGB
         color_by_rgb(vis)
