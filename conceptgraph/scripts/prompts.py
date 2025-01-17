@@ -150,4 +150,24 @@ prompts = {"system": system_prompt,
            "pose": pose_prompts}
 
 semantic_types = ["spatial_relationship", "behavioral", "pose"]
-constraint_types = ["inside", "above", "below", "around"]
+# constraint_types = ["inside", "above", "below", "around", "on"]
+# constraint_types = ["inside", "above", "below", "around", "on", 
+#                     "across", "along", "behind", "from", "in", 
+#                     "in front of", "near", "over", "under", "to"]
+constraint_types = ["inside", "above", "below", "around", "on", 
+                    "in", "along", "near", "over", "under", "to",
+                    "out of"]
+# constraint_groups = [["inside", "in"], ["above", "over"], ["below", "under"], 
+#                      ["around", "along", "near", "to"], ["on"], ["out of"]]
+constraint_groups = {"inside": ["in"],
+                     "in": ["inside"],
+                     "above": ["over"],
+                     "over": ["above"],
+                     "below": ["under"],
+                     "under": ["below"],
+                     "around": ["along", "near", "to"],
+                     "along": ["around", "near", "to"],
+                     "near": ["around", "along", "to"],
+                     "to": ["around", "along", "near"],
+                     "on": [],
+                     "out of": []}

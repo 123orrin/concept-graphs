@@ -100,11 +100,12 @@ office_objects = [  # Not solely office objects, but a mix of office, home, and 
 ]
 
 # specific_objects = ["robot", "robot arm", "microwave door", "microwave body", "balloon", "cabinet door"]
-specific_objects = ["robot", "robot arm", "microwave body", "balloon", "cabinet door"]
+specific_objects = ["robot", "robot arm", "microwave body", "balloon", "cabinet door", "eggs"]
 # specific_objects = ["robot", "robot arm", "balloon", "cabinet door"]
 
 # Combine all object classes
-object_classes = scannet_objects + kitchen_objects + office_objects + specific_objects
+# object_classes = scannet_objects + kitchen_objects + office_objects + specific_objects
+object_classes = scannet_objects + specific_objects  # The kitchen and office objects are too specific
 
 # Remove duplicates
 object_classes = list(set(object_classes))
