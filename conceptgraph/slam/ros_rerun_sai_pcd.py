@@ -101,7 +101,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image as ROSImage, CameraInfo, PointCloud2
 from geometry_msgs.msg import PoseStamped, Point
 import ros2_numpy.point_cloud2 as point_cloud2
-# from lsy_interfaces.srv import ConceptGraphQuery
+from lsy_interfaces.srv import ConceptGraphQuery
 
 import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
@@ -283,56 +283,56 @@ class Subscriber(Node):
         intrinsics = intrinsics.to(cfg.device).type(torch.float)
         return intrinsics
     
-# class QueryNode(Node):
-#     def __init__(self):
-#         super().__init__('query_node')
-#         self.query_service = self.create_service(ConceptGraphQuery, 'conceptgraph_query_service', self.query_callback)
+class QueryNode(Node):
+    def __init__(self):
+        super().__init__('query_node')
+        self.query_service = self.create_service(ConceptGraphQuery, 'conceptgraph_query_service', self.query_callback)
 
-#         self.clip_model = None
-#         self.clip_tokenizer = None
-#         self.objects = None
+        self.clip_model = None
+        self.clip_tokenizer = None
+        self.objects = None
 
-#     def query_callback(self, request, response):
-#         if not self.objects:
-#             response.object_center = Point()
-#             return
-#         text_query = request.query
-#         text_queries = [text_query]
+    def query_callback(self, request, response):
+        if not self.objects:
+            response.object_center = Point()
+            return
+        text_query = request.query
+        text_queries = [text_query]
         
-#         text_queries_tokenized = self.clip_tokenizer(text_queries).to("cuda")
-#         text_query_ft = self.clip_model.encode_text(text_queries_tokenized)
-#         text_query_ft = text_query_ft / text_query_ft.norm(dim=-1, keepdim=True)
-#         text_query_ft = text_query_ft.squeeze()
+        text_queries_tokenized = self.clip_tokenizer(text_queries).to("cuda")
+        text_query_ft = self.clip_model.encode_text(text_queries_tokenized)
+        text_query_ft = text_query_ft / text_query_ft.norm(dim=-1, keepdim=True)
+        text_query_ft = text_query_ft.squeeze()
         
-#         # similarities = objects.compute_similarities(text_query_ft)
-#         objects_clip_fts = self.objects.get_stacked_values_torch("clip_ft")
-#         objects_clip_fts = objects_clip_fts.to("cuda")
-#         similarities = F.cosine_similarity(
-#             text_query_ft.unsqueeze(0), objects_clip_fts, dim=-1
-#         )
-#         max_value = similarities.max()
-#         min_value = similarities.min()
-#         probs = F.softmax(similarities, dim=0)
-#         max_prob_idx = torch.argmax(probs)
+        # similarities = objects.compute_similarities(text_query_ft)
+        objects_clip_fts = self.objects.get_stacked_values_torch("clip_ft")
+        objects_clip_fts = objects_clip_fts.to("cuda")
+        similarities = F.cosine_similarity(
+            text_query_ft.unsqueeze(0), objects_clip_fts, dim=-1
+        )
+        max_value = similarities.max()
+        min_value = similarities.min()
+        probs = F.softmax(similarities, dim=0)
+        max_prob_idx = torch.argmax(probs)
 
-#         max_prob_object = self.objects[max_prob_idx]
-#         center = max_prob_object["bbox"].center
-#         print(f"Most probable object is at index {max_prob_idx} with class name '{max_prob_object['class_name']}'")
-#         print(f"location xyz: {center}")
+        max_prob_object = self.objects[max_prob_idx]
+        center = max_prob_object["bbox"].center
+        print(f"Most probable object is at index {max_prob_idx} with class name '{max_prob_object['class_name']}'")
+        print(f"location xyz: {center}")
 
-#         object_center = Point()
-#         object_center.x, object_center.y, object_center.z = center
-#         response.object_center = object_center
-#         return response
+        object_center = Point()
+        object_center.x, object_center.y, object_center.z = center
+        response.object_center = object_center
+        return response
 
-#     def _attach_model(self, model):
-#         self.clip_model = model
+    def _attach_model(self, model):
+        self.clip_model = model
 
-#     def _attach_tokenizer(self, tokenizer):
-#         self.clip_tokenizer = tokenizer
+    def _attach_tokenizer(self, tokenizer):
+        self.clip_tokenizer = tokenizer
     
-#     def _attach_objects(self, objects):
-#         self.objects = objects
+    def _attach_objects(self, objects):
+        self.objects = objects
     
 
 # Disable torch gradient computation
@@ -455,10 +455,10 @@ def main(cfg : DictConfig):
     frame_idx = -1
 
     node = Subscriber()
-    # query_service_node = QueryNode()
-    # query_service_node._attach_model(clip_model)
-    # query_service_node._attach_tokenizer(clip_tokenizer)
-    # query_service_node._attach_objects(objects)
+    query_service_node = QueryNode()
+    query_service_node._attach_model(clip_model)
+    query_service_node._attach_tokenizer(clip_tokenizer)
+    query_service_node._attach_objects(objects)
     while rclpy.ok():
         frame_idx += 1
         # if counter + 1 in skipped_frames:
@@ -472,11 +472,11 @@ def main(cfg : DictConfig):
         if cfg.use_pc_for_depth:
             while not (node.received_color and node.received_pc and node.received_info and node.received_pose):
                 rclpy.spin_once(node, timeout_sec=0)
-                # rclpy.spin_once(query_service_node, timeout_sec=0)
+                rclpy.spin_once(query_service_node, timeout_sec=0)
         else:
             while not (node.received_color and node.received_depth and node.received_info and node.received_pose):
                 rclpy.spin_once(node, timeout_sec=0)
-                # rclpy.spin_once(query_service_node, timeout_sec=0)
+                rclpy.spin_once(query_service_node, timeout_sec=0)
 
         color_tensor, depth_tensor, intrinsics, pose_tensor = node.process_inputs(cfg,
                                                                                   rotate=cfg.rotate,
@@ -795,7 +795,7 @@ def main(cfg : DictConfig):
         orr_log_objs_pcd_and_bbox(objects, obj_classes)
         orr_log_edges(objects, map_edges, obj_classes)
 
-        # query_service_node._attach_objects(objects)
+        query_service_node._attach_objects(objects)
 
         if cfg.save_objects_all_frames:
             save_objects_for_frame(
