@@ -97,11 +97,13 @@ from conceptgraph.dataset.conceptgraphs_datautils import scale_intrinsics
 
 import rclpy
 from rclpy.node import Node
+import rclpy.time
 from sensor_msgs.msg import Image as ROSImage, CameraInfo, PointCloud2
 from geometry_msgs.msg import PoseStamped, Point
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 import ros2_numpy.point_cloud2 as point_cloud2
+from message_filters import Subscriber as MF_Subscriber, ApproximateTimeSynchronizer
 from lsy_interfaces.srv import ConceptGraphQuery
 
 import torch.nn.functional as F
@@ -111,209 +113,184 @@ from scipy.spatial.transform import Rotation as R
 DEBUG = True
 
 class Subscriber(Node):
-    def __init__(self):
+    def __init__(self, cfg):
         super().__init__('subscriber')
+        self.cfg = cfg
 
-        self.sub_color = self.create_subscription(ROSImage, 'camera/color/image_raw', self.color_callback, 10)
-        self.sub_depth = self.create_subscription(ROSImage, 'camera/aligned_depth_to_color/image_raw', self.depth_callback, 10)
-        # self.sub_depth = self.create_subscription(ROSImage, 'camera/depth/image_raw', self.depth_callback, 10)
-        self.sub_info = self.create_subscription(CameraInfo, 'camera/color/camera_info', self.info_callback, 10)
-        self.sub_pc = self.create_subscription(PointCloud2, 'camera/depth/color/points', self.pc_callback, 10)
-        # self.sub_pc = self.create_subscription(PointCloud2, 'camera/depth_registered/points', self.pc_callback, 10)
+        self.sub_info = MF_Subscriber(self, CameraInfo, 'camera/color/camera_info')
+        self.sub_color = MF_Subscriber(self, ROSImage, 'camera/color/image_raw')
+        # self.sub_pc = Subscriber(self, PointCloud2, 'camera/depth_registered/points')
+        # self.sub_pose = Subscriber(self, PoseStamped, 'state_estimator/pose_filtered')
+
+        MAX_MESSAGE_DELAY = 1/15
+        if cfg.use_pc_for_depth:
+            self.sub_pc = MF_Subscriber(self, PointCloud2, 'camera/depth/color/points')
+            self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_pc], 1, MAX_MESSAGE_DELAY)
+        else:
+            self.sub_depth = MF_Subscriber(self, ROSImage, 'camera/aligned_depth_to_color/image_raw')
+            self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth], 1, MAX_MESSAGE_DELAY)
+
+        self.callback_synchronizer.registerCallback(self.callback_sync)
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.color_msg = None
-        self.depth_msg = None
-        self.camera_msg = None
-        self.pose_msg = None
-        self.pc_msg = None
+        self.ready_to_process = False
+        self.info = None
+        self.color = None
+        self.depth = None
+        self.pose = None
 
-        self.received_color = False
-        self.received_depth = False
-        self.received_info = False
-        self.received_pose = False
-        self.received_pc = False
 
-    def color_callback(self, msg):
-        self.color_msg = msg
-        if DEBUG and not self.received_color:
-            print('Color received')
-        self.received_color = True
+    def callback_sync(self, info_msg, color_msg, depth_msg):
+        self.ready_to_process = False
+        self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
+        self.pose = self._get_pose(time=color_msg.header.stamp)
+        # self.pose = self._get_pose(time=rclpy.time.Time())
+        if self.pose is not None:
+            self.ready_to_process = True
 
-    def depth_callback(self, msg):
-        self.depth_msg = msg
-        if DEBUG and not self.received_depth:
-            print('Depth received')
-        self.received_depth = True
-
-    def info_callback(self, msg):
-        self.camera_msg = msg
-        if DEBUG and not self.received_info:
-            print('Info received')
-        self.received_info = True
-    
-    def pc_callback(self, msg):
-        self.pc_msg = msg
-        if DEBUG and not self.received_pc:
-            print('PC received')
-        self.received_pc = True
-
-    def process_inputs(self, cfg, rotate=True, use_pc_for_depth=False):
+    def _process_inputs(self, info_msg, color_msg, depth_msg):
         # Process all inputs
-        color = self._process_color(cfg, rotate)
-        if use_pc_for_depth:
-            depth = self._process_depth_from_pc(cfg, rotate)
+        intrinsics = self._process_intrinsics(info_msg)
+        color = self._process_color(color_msg)
+        if self.cfg.use_pc_for_depth:
+            depth = self._process_depth_from_pc(depth_msg, info_msg) # Info Message needed to project using K-matrix
         else:
-            depth = self._process_depth(cfg, rotate)
-        intrinsics = self._process_intrinsics(cfg, rotate)
-        pose = self._process_pose(cfg, rotate)
-        # Set flags to false for next iteration
-        self.received_color = False
-        self.received_depth = False
-        self.received_info = False
-        self.received_pose = False
-        self.received_pc = False
-        # Return processed inputs
-        return color, depth, intrinsics, pose
+            depth = self._process_depth(depth_msg)
+        return intrinsics, color, depth
     
-    def _process_color(self, cfg, rotate):
+    def _process_color(self, color_msg):
         # Get data
-        color = np.array(self.color_msg.data).astype(np.uint8).reshape(cfg["camera_params"]["image_height"], cfg["camera_params"]["image_width"], 3)
+        color = np.array(color_msg.data).astype(np.uint8).reshape(self.cfg["camera_params"]["image_height"], self.cfg["camera_params"]["image_width"], 3)
         # Resize
         color = cv2.resize(
             color,
-            (cfg.desired_width, cfg.desired_height),
+            (self.cfg.desired_width, self.cfg.desired_height),
             interpolation=cv2.INTER_LINEAR,
         )
         # Rotate if necessary
-        if rotate:
+        if self.cfg.rotate:
             color = np.rot90(color, -1)
         # Convert to RGB from BGR
         color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
         # Convert to torch tensor
         color = torch.from_numpy(color)
-        color = color.to(cfg.device).type(torch.float)
+        color = color.to(self.cfg.device).type(torch.float)
         return color
 
-    def _process_depth(self, cfg, rotate, from_pc=False, depth_from_pc=None):
+    def _process_depth(self, depth_msg):
         # Get data
-        if from_pc:
-            depth = depth_from_pc
+        if self.cfg.use_pc_for_depth:
+            depth = depth_msg
         else:
-            depth = np.frombuffer(self.depth_msg.data, dtype=np.uint16).reshape(cfg["camera_params"]["image_height"], cfg["camera_params"]["image_width"])
-        # Clip depth
-        invalid_indices = (depth < cfg.min_depth * 1000) | (depth > cfg.max_depth * 1000)
+            depth = np.frombuffer(depth_msg.data, dtype=np.uint16).reshape(self.cfg["camera_params"]["image_height"], self.cfg["camera_params"]["image_width"])
+        invalid_indices = (depth < self.cfg.min_depth * 1000) | (depth > self.cfg.max_depth * 1000)
         depth[invalid_indices] = 0
         # # Subsample
         # depth = depth.flatten()
         # new_depth = np.zeros_like(depth)
-        # sample_indices = range(0, np.size(depth), cfg.subsample_interval)
+        # sample_indices = range(0, np.size(depth), self.cfg.subsample_interval)
         # new_depth[sample_indices] = depth[sample_indices]
-        # new_depth = new_depth.reshape(cfg["camera_params"]["image_height"], cfg["camera_params"]["image_width"])
+        # new_depth = new_depth.reshape(self.cfg["camera_params"]["image_height"], self.cfg["camera_params"]["image_width"])
         # depth = new_depth
-        # Remove floor
+        # # Remove floor
         # sp = np.shape(depth)
         # depth[int(sp[0] * (7/8)):,:] = 0
         # Resize
         depth = cv2.resize(
             depth.astype(float),
-            (cfg.desired_width, cfg.desired_height),
+            (self.cfg.desired_width, self.cfg.desired_height),
             interpolation=cv2.INTER_NEAREST,
         )
         depth = np.expand_dims(depth, -1)
         # Rotate if necessary
-        if rotate:
+        if self.cfg.rotate:
             depth = np.rot90(depth, -1)
+        # Clip depth
         # Convert depth to metres
-        depth = depth / cfg["camera_params"]["png_depth_scale"]
+        depth = depth / self.cfg["camera_params"]["png_depth_scale"]
         # Convert to torch tensor
         depth = torch.from_numpy(depth)
-        depth = depth.to(cfg.device).type(torch.float)
+        depth = depth.to(self.cfg.device).type(torch.float)
         return depth
 
-    def _process_depth_from_pc(self, cfg, rotate):
-        # Get data
-        if not self.received_info:
-            return
-        pc = point_cloud2.pointcloud2_to_array(self.pc_msg)
+    def _process_depth_from_pc(self, pc_msg, info_msg):
+        pc = point_cloud2.pointcloud2_to_array(pc_msg)
         # Format into numpy array
         points_camera = np.zeros((len(pc), 3))
         for i, point in enumerate(pc):
             points_camera[i] = point[0], point[1], point[2]
         # Project points onto the 2D image plane using intrinsics
-        intrinsic_matrix = np.array(self.camera_msg.k).reshape(3, 3)
+        intrinsic_matrix = np.array(info_msg.k).reshape(3, 3)
         uv = (intrinsic_matrix @ points_camera.T).T
         uv[:, 0] /= uv[:, 2]
         uv[:, 1] /= uv[:, 2]
         # Keep only valid points that are in front of the camera, inside the image frame, and within the depth range
-        valid_indices = (uv[:, 2] > 0) & (uv[:, 0] >= 0) & (uv[:, 0] < cfg["camera_params"]["image_width"]) & \
-                        (uv[:, 1] >= 0) & (uv[:, 1] < cfg["camera_params"]["image_height"]) & \
-                        (uv[:, 2] >= cfg.min_depth) & (uv[:, 2] <= cfg.max_depth)
+        valid_indices = (uv[:, 2] > 0) & (uv[:, 0] >= 0) & (uv[:, 0] < self.cfg["camera_params"]["image_width"]) & \
+                        (uv[:, 1] >= 0) & (uv[:, 1] < self.cfg["camera_params"]["image_height"]) & \
+                        (uv[:, 2] >= self.cfg.min_depth) & (uv[:, 2] <= self.cfg.max_depth)
         # Create depth image
-        depth_image = np.zeros((cfg["camera_params"]["image_height"], cfg["camera_params"]["image_width"]), dtype=np.uint16)
+        depth_image = np.zeros((self.cfg["camera_params"]["image_height"], self.cfg["camera_params"]["image_width"]), dtype=np.uint16)
         uv_valid = uv[valid_indices]
-        depth_valid = uv_valid[:, 2] * cfg["camera_params"]["png_depth_scale"]  # Scale depth to millimeters
+        depth_valid = uv_valid[:, 2] * self.cfg["camera_params"]["png_depth_scale"]  # Scale depth to millimeters
         x_valid = uv_valid[:, 0].astype(np.int32)
         y_valid = uv_valid[:, 1].astype(np.int32)
 
         depth_image[y_valid, x_valid] = depth_valid.astype(np.uint16)
         # Process depth image
-        depth = self._process_depth(cfg, rotate, from_pc=True, depth_from_pc=depth_image)
+        depth = self._process_depth(depth_image)
         return depth
     
-    def _process_pose(self, cfg, rotate):
+    def _process_pose(self, transform_msg):
         # Convert position + quaternion to pose matrix
         pose = np.eye(4)
         pose[:3, :3] = R.from_quat([
-            self.pose_msg.transform.rotation.x,
-            self.pose_msg.transform.rotation.y,
-            self.pose_msg.transform.rotation.z,
-            self.pose_msg.transform.rotation.w
+            transform_msg.transform.rotation.x,
+            transform_msg.transform.rotation.y,
+            transform_msg.transform.rotation.z,
+            transform_msg.transform.rotation.w
         ]).as_matrix()
         pose[:3, 3] = np.array([
-            self.pose_msg.transform.translation.x,
-            self.pose_msg.transform.translation.y,
-            self.pose_msg.transform.translation.z
+            transform_msg.transform.translation.x,
+            transform_msg.transform.translation.y,
+            transform_msg.transform.translation.z
         ])
         # Rotate if necessary
-        if rotate:
+        if self.cfg.rotate:
             image_rotation = np.eye(4)
             image_rotation[:3, :3] = R.from_euler('z', -90, degrees=True).as_matrix()
             pose = pose @ image_rotation
         # Convert to torch tensor
         pose = torch.from_numpy(pose)
-        pose = pose.to(cfg.device).type(torch.float)
+        pose = pose.to(self.cfg.device).type(torch.float)
         return pose
     
-    def _process_intrinsics(self, cfg, rotate):
+    def _process_intrinsics(self, info_msg):
         # Get camera intrinsics and convert to torch tensor
-        K = np.array(self.camera_msg.k).reshape(3, 3)
-        # Rotate if necessary
-        if rotate:
-            K[0, 2], K[1, 2] = K[1, 2], K[0, 2] # switch cx, cy
-            K[0, 0], K[1, 1] = K[1, 1], K[0, 0] # switch fx, fy
+        K = np.array(info_msg.k).reshape(3, 3)
         K = torch.from_numpy(K)
         # Scale intrinsics
-        height_downsample_ratio = float(cfg.desired_height) / cfg["camera_params"]["image_height"]
-        width_downsample_ratio = float(cfg.desired_width) / cfg["camera_params"]["image_width"]
+        height_downsample_ratio = float(self.cfg.desired_height) / self.cfg["camera_params"]["image_height"]
+        width_downsample_ratio = float(self.cfg.desired_width) / self.cfg["camera_params"]["image_width"]
         K = scale_intrinsics(K, height_downsample_ratio, width_downsample_ratio)
+        # Rotate if necessary
+        if self.cfg.rotate:
+            K[0, 2], K[1, 2] = K[1, 2], K[0, 2] # switch cx, cy
+            K[0, 0], K[1, 1] = K[1, 1], K[0, 0] # switch fx, fy
         # Convert to torch tensor (not sure why we do this but its in the original dataset loader)
         intrinsics = torch.eye(4).to(K)
         intrinsics[:3, :3] = K
-        intrinsics = intrinsics.to(cfg.device).type(torch.float)
+        intrinsics = intrinsics.to(self.cfg.device).type(torch.float)
         return intrinsics
     
-    def get_pose(self):
+    def _get_pose(self, time=rclpy.time.Time()):
         try:
-            self.pose_msg = self.tf_buffer.lookup_transform("map", "camera_color_optical_frame", rclpy.time.Time())
-            # self.pose_msg = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
-            return True
+            transform_msg = self.tf_buffer.lookup_transform("map", "camera_color_optical_frame", time)
+            return self._process_pose(transform_msg)
         except Exception as e:
             print(f"Failed to get pose: {e}")
-            return False
-
+            return None
     
 class QueryNode(Node):
     def __init__(self):
@@ -381,12 +358,12 @@ def main(cfg : DictConfig):
     orr.init("realtime_mapping")
     orr.spawn()
 
-    owandb = OptionalWandB()
-    owandb.set_use_wandb(cfg.use_wandb)
-    owandb.init(project="concept-graphs", 
-            #    entity="concept-graphs",
-                config=cfg_to_dict(cfg),
-               )
+    # owandb = OptionalWandB()
+    # owandb.set_use_wandb(cfg.use_wandb)
+    # owandb.init(project="concept-graphs", 
+    #         #    entity="concept-graphs",
+    #             config=cfg_to_dict(cfg),
+    #            )
     cfg = process_cfg(cfg)
 
     objects = MapObjectList(device=cfg.device)
@@ -459,38 +436,24 @@ def main(cfg : DictConfig):
     counter = 0
     frame_idx = -1
 
-    node = Subscriber()
+    node = Subscriber(cfg=cfg)
     query_service_node = QueryNode()
     query_service_node._attach_model(clip_model)
     query_service_node._attach_tokenizer(clip_tokenizer)
     query_service_node._attach_objects(objects)
     while rclpy.ok():
-
-        if cfg.use_pc_for_depth:
-            while not (node.received_color and node.received_pc and node.received_info and node.received_pc):
-                rclpy.spin_once(node, timeout_sec=0)
-                rclpy.spin_once(query_service_node, timeout_sec=0)
-        else:
-            while not (node.received_color and node.received_depth and node.received_info and node.received_depth):
-                rclpy.spin_once(node, timeout_sec=0)
-                rclpy.spin_once(query_service_node, timeout_sec=0)
         
-        node.received_pose = node.get_pose()
-        if not node.received_pose:
-            node.received_color = False
-            node.received_depth = False
-            node.received_info = False
-            node.received_pc = False
-            continue
+        while not node.ready_to_process:
+            rclpy.spin_once(node, timeout_sec=0)
+            rclpy.spin_once(query_service_node, timeout_sec=0)
+        node.ready_to_process = False
 
         frame_idx += 1
         tracker.curr_frame_idx = frame_idx
         counter+=1
         orr.set_time_sequence("frame", frame_idx)
 
-        color_tensor, depth_tensor, intrinsics, pose_tensor = node.process_inputs(cfg,
-                                                                                  rotate=cfg.rotate,
-                                                                                  use_pc_for_depth=cfg.use_pc_for_depth)
+        color_tensor, depth_tensor, intrinsics, pose_tensor = node.color, node.depth, node.info, node.pose
         #color_tensor2, depth_tensor2, intrinsics2, *_ = dataset[frame_idx]
 
         # Read info about current frame from dataset
@@ -643,7 +606,7 @@ def main(cfg : DictConfig):
             vis_camera_width = cfg.desired_width
             vis_camera_height = cfg.desired_height
         prev_adjusted_pose = orr_log_camera(intrinsics, adjusted_pose, prev_adjusted_pose, vis_camera_width, vis_camera_height, frame_idx)
-        
+
         orr_log_rgb_image(color_path)
         orr_log_annotated_image(color_path, det_exp_vis_path)
         orr_log_depth_image(depth_tensor.cpu())
@@ -709,10 +672,10 @@ def main(cfg : DictConfig):
         if len(objects) == 0:
             objects.extend(detection_list)
             tracker.increment_total_objects(len(detection_list))
-            owandb.log({
-                    "total_objects_so_far": tracker.get_total_objects(),
-                    "objects_this_frame": len(detection_list),
-                })
+            # owandb.log({
+            #         "total_objects_so_far": tracker.get_total_objects(),
+            #         "objects_this_frame": len(detection_list),
+            #     })
             continue 
 
         # pdb.set_trace()
@@ -860,25 +823,25 @@ def main(cfg : DictConfig):
                 edges=map_edges
             )
 
-        owandb.log({
-            "frame_idx": frame_idx,
-            "counter": counter,
-            "exit_early_flag": exit_early_flag,
-            "is_final_frame": is_final_frame,
-        })
+        # owandb.log({
+        #     "frame_idx": frame_idx,
+        #     "counter": counter,
+        #     "exit_early_flag": exit_early_flag,
+        #     "is_final_frame": is_final_frame,
+        # })
 
         tracker.increment_total_objects(len(objects))
         tracker.increment_total_detections(len(detection_list))
-        owandb.log({
-                "total_objects": tracker.get_total_objects(),
-                "objects_this_frame": len(objects),
-                "total_detections": tracker.get_total_detections(),
-                "detections_this_frame": len(detection_list),
-                "frame_idx": frame_idx,
-                "counter": counter,
-                "exit_early_flag": exit_early_flag,
-                "is_final_frame": is_final_frame,
-                })
+        # owandb.log({
+        #         "total_objects": tracker.get_total_objects(),
+        #         "objects_this_frame": len(objects),
+        #         "total_detections": tracker.get_total_detections(),
+        #         "detections_this_frame": len(detection_list),
+        #         "frame_idx": frame_idx,
+        #         "counter": counter,
+        #         "exit_early_flag": exit_early_flag,
+        #         "is_final_frame": is_final_frame,
+        #         })
     # LOOP OVER -----------------------------------------------------
     
     handle_rerun_saving(cfg.use_rerun, cfg.save_rerun, cfg.exp_suffix, exp_out_path)
@@ -910,7 +873,7 @@ def main(cfg : DictConfig):
         if cfg.save_video:
             save_video_detections(det_exp_path)
 
-    owandb.finish()
+    # owandb.finish()
     node.destroy_node()
 
 if __name__ == "__main__":
