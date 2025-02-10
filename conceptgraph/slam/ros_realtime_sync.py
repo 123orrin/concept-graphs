@@ -143,6 +143,8 @@ class Subscriber(Node):
 
 
     def callback_sync(self, info_msg, color_msg, depth_msg):
+        if DEBUG:
+            print("Received synchronized data")
         self.ready_to_process = False
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
         self.pose = self._get_pose(time=color_msg.header.stamp)
@@ -358,26 +360,17 @@ def main(cfg : DictConfig):
     orr.init("realtime_mapping")
     orr.spawn()
 
-    # owandb = OptionalWandB()
-    # owandb.set_use_wandb(cfg.use_wandb)
-    # owandb.init(project="concept-graphs", 
-    #         #    entity="concept-graphs",
-    #             config=cfg_to_dict(cfg),
-    #            )
+    owandb = OptionalWandB()
+    owandb.set_use_wandb(cfg.use_wandb)
+    owandb.init(project="concept-graphs", 
+            #    entity="concept-graphs",
+                config=cfg_to_dict(cfg),
+               )
     cfg = process_cfg(cfg)
 
     objects = MapObjectList(device=cfg.device)
     map_edges = MapEdgeMapping(objects)
-
-    # For visualization
-    if cfg.vis_render:
-        view_param = read_pinhole_camera_parameters(cfg.render_camera_path)
-        obj_renderer = OnlineObjectRenderer(
-            view_param = view_param,
-            base_objects = None, 
-            gray_map = False,
-        )
-        frames = []
+    
     # output folder for this mapping experiment
     exp_out_path = get_exp_out_path(cfg.dataset_root, cfg.scene_id, cfg.exp_suffix)
 
@@ -672,10 +665,10 @@ def main(cfg : DictConfig):
         if len(objects) == 0:
             objects.extend(detection_list)
             tracker.increment_total_objects(len(detection_list))
-            # owandb.log({
-            #         "total_objects_so_far": tracker.get_total_objects(),
-            #         "objects_this_frame": len(detection_list),
-            #     })
+            owandb.log({
+                    "total_objects_so_far": tracker.get_total_objects(),
+                    "objects_this_frame": len(detection_list),
+                })
             continue 
 
         # pdb.set_trace()
@@ -790,25 +783,6 @@ def main(cfg : DictConfig):
                 adjusted_pose,
                 color_path
             )
-        
-        if cfg.vis_render:
-            # render a frame, if needed (not really used anymore since rerun)
-            vis_render_image(
-                objects,
-                obj_classes,
-                obj_renderer,
-                image_original_pil,
-                adjusted_pose,
-                frames,
-                frame_idx,
-                color_path,
-                cfg.obj_min_detections,
-                cfg.class_agnostic,
-                cfg.debug_render,
-                is_final_frame,
-                cfg.exp_out_path,
-                cfg.exp_suffix,
-            )
 
         if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_interval == 0):
             # save the pointcloud
@@ -823,25 +797,25 @@ def main(cfg : DictConfig):
                 edges=map_edges
             )
 
-        # owandb.log({
-        #     "frame_idx": frame_idx,
-        #     "counter": counter,
-        #     "exit_early_flag": exit_early_flag,
-        #     "is_final_frame": is_final_frame,
-        # })
+        owandb.log({
+            "frame_idx": frame_idx,
+            "counter": counter,
+            "exit_early_flag": exit_early_flag,
+            "is_final_frame": is_final_frame,
+        })
 
         tracker.increment_total_objects(len(objects))
         tracker.increment_total_detections(len(detection_list))
-        # owandb.log({
-        #         "total_objects": tracker.get_total_objects(),
-        #         "objects_this_frame": len(objects),
-        #         "total_detections": tracker.get_total_detections(),
-        #         "detections_this_frame": len(detection_list),
-        #         "frame_idx": frame_idx,
-        #         "counter": counter,
-        #         "exit_early_flag": exit_early_flag,
-        #         "is_final_frame": is_final_frame,
-        #         })
+        owandb.log({
+                "total_objects": tracker.get_total_objects(),
+                "objects_this_frame": len(objects),
+                "total_detections": tracker.get_total_detections(),
+                "detections_this_frame": len(detection_list),
+                "frame_idx": frame_idx,
+                "counter": counter,
+                "exit_early_flag": exit_early_flag,
+                "is_final_frame": is_final_frame,
+                })
     # LOOP OVER -----------------------------------------------------
     
     handle_rerun_saving(cfg.use_rerun, cfg.save_rerun, cfg.exp_suffix, exp_out_path)
@@ -873,7 +847,7 @@ def main(cfg : DictConfig):
         if cfg.save_video:
             save_video_detections(det_exp_path)
 
-    # owandb.finish()
+    owandb.finish()
     node.destroy_node()
 
 if __name__ == "__main__":
