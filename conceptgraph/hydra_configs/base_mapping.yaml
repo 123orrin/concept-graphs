@@ -30,7 +30,7 @@ exit_early_file: ${repo_root}/conceptgraph/hydra_configs/early_exit.json
 device: cuda
 
 use_iou: !!bool True
-spatial_sim_type: overlap # "iou", "giou", "overlap"
+spatial_sim_type: iou # "iou", "giou", "overlap"
 phys_bias: 0.0
 match_method: "sim_sum" # "sep_thresh", "sim_sum"
 # Only when match_method=="sep_thresh"
@@ -38,7 +38,7 @@ semantic_threshold: 0.5
 physical_threshold: 0.5
 # Only when match_method=="sim_sum"
 #sim_threshold: 1.2
-sim_threshold: 0.7
+sim_threshold: 1.0
 
 # For contain_number
 use_contain_number: !!bool False
@@ -64,8 +64,8 @@ obj_min_points: 0
 obj_min_detections: 2
 
 # For merge_overlap_objects() function
-merge_overlap_thresh: 0.7      # -1 means do not perform the merge_overlap_objects()
-merge_visual_sim_thresh: 0.7   # Merge only if the visual similarity is larger
+merge_overlap_thresh: 1.2      # -1 means do not perform the merge_overlap_objects()
+merge_visual_sim_thresh: 0.8   # Merge only if the visual similarity is larger
 merge_text_sim_thresh: 0.7     # Merge only if the text cosine sim is larger
 
 # Periodically perform post-process operations every k frame

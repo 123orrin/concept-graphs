@@ -11,44 +11,41 @@ color_path: ${dataset_root}/${scene_id}/color
 
 device: cuda
 
-rotate: False
+rotate: True
 use_pc_for_depth: True
 
-min_depth: 0.1
-max_depth: 10.0
+blur_threshold: 100
 
-true_height: 720
-true_width: 1280
+min_depth: 0.8
+max_depth: 2.5
+subsample_interval: 15
 
-desired_height: 370
-desired_width: 640
+# Intel low resolution
+desired_height: 240
+desired_width: 424
 
-periodically_save_pcd: True 
+# Orbbec
+# desired_height: 180
+# desired_width: 320
+
+periodically_save_pcd: False 
 periodically_save_pcd_interval: 10
 
 camera_params:
+  # ORBBEC FEMTO BOLT
   # image_height: 720
   # image_width: 1280
-  # fx: 762.72
-  # fy: 754.75
-  # cx: 640.0
-  # cy: 360.0
-  # image_height: 704
-  # image_width: 1260
-  # fx: 762.72
-  # fy: 754.75
-  # cx: 627.0
-  # cy: 360.0
-  image_height: 720
-  image_width: 1280
-  # fx: 750.025
-  # fy: 749.733
-  # cx: 636.264
-  # cy: 369.197
-  fx: 791.7353879123823
-  fy: 791.7353879123823
-  cx: 640.0
-  cy: 360.0
+  # fx: 750.0245971679688
+  # fy: 749.7333374023438
+  # cx: 636.2642822265625
+  # cy: 369.1966247558594
+  # INTEL REALSENSE D435i
+  image_height: 240
+  image_width: 424
+  fx: 303.17822265625
+  fy: 303.2071228027344
+  cx: 213.67611694335938
+  cy: 125.46749877929688
   png_depth_scale: 1000 #for depth image in png format
   crop_edge: 0
 
