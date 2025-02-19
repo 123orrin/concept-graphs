@@ -2,14 +2,15 @@ import random
 import time
 import numpy as np
 
-from openai import OpenAI
+import asyncio
+from openai import AsyncOpenAI
 
 from prompts import prompts, semantic_types, constraint_types, constraint_groups
 
 
-client = OpenAI()
+client = AsyncOpenAI()
 
-def semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=None, debug=False):
+async def semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=None, debug=False):
     assert semantic_type in semantic_types, f"Semantic type must be one of {semantic_types}."
 
     sys = prompts["system"]
@@ -17,9 +18,9 @@ def semantic_safety_request(ee_object, scene_object, constraint_type, semantic_t
     assistant = prompts[semantic_type][1]
     prompt = prompts[semantic_type][2]
 
-    def semantic_safety():
+    async def semantic_safety():
         start_time = time.time()
-        completion = client.chat.completions.create(
+        completion = await client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "developer", "content": sys},
@@ -33,15 +34,13 @@ def semantic_safety_request(ee_object, scene_object, constraint_type, semantic_t
         response = completion.choices[0].message.content
         if debug:
             print(response)
-            print(f"Elapsed time: {elapsed_time} seconds")
+            # print(f"Elapsed time: {elapsed_time} seconds")
 
         return is_safe(response), elapsed_time
 
-    return semantic_safety
-
+    return await semantic_safety()
 
 def is_safe(response):
-    # if response starts with "Yes." then return True else return False
     response = response.lower()
     if response.startswith("yes."):
         return True
@@ -51,72 +50,137 @@ def is_safe(response):
         print("Invalid response. Please respond with Yes. or No.")
         return None
 
-
-def majority_vote(expression, repetitions=3, max_retries=3, debug=False):
+async def majority_vote(expression_func, args, repetitions=3, max_retries=3, debug=False):
     assert repetitions % 2 == 1, "Repetitions must be an odd number."
 
-    votes = []
-    timings = []
-    for i in range(repetitions):
+    async def get_vote():
         vote = None
         retries = 0
-        while vote is None:
-            vote, timing = expression()
+        while vote is None and retries <= max_retries:
+            vote, timing = await expression_func(*args, debug=debug)
             if vote is None:
                 print("Incorrect response format. Retrying...")
                 retries += 1
-                if retries > max_retries:
-                    print("Maximum number of retries exceeded. Prompt may be insufficient.")
-                    exit()
-        votes.append(vote)
-        timings.append(timing)
+        if retries > max_retries:
+            print("Maximum number of retries exceeded. Prompt may be insufficient.")
+            return None, 0
+        return vote, timing
 
+    # Create tasks for all repetitions
+    tasks = [get_vote() for _ in range(repetitions)]
+    results = await asyncio.gather(*tasks)
+    
+    # Filter out None results
+    valid_results = [(vote, timing) for vote, timing in results if vote is not None]
+    if not valid_results:
+        return False, [0]
+    
+    votes, timings = zip(*valid_results)
+    
     if debug:
         print(votes)
 
-    return votes.count(True) > votes.count(False), timings
+    return votes.count(True) > votes.count(False), list(timings)
 
-
-def required_semantic_safety_constraints(ee_objects, semantic_types, scene_objects, constraint_types, constraint_groups, repetitions, debug=False, save_path=None):
+async def required_semantic_safety_constraints(ee_objects, semantic_types, scene_objects, constraint_types, constraint_groups, repetitions, debug=False):
     semantic_safety = []
     all_timings = []
-    for ee_object in ee_objects:
+    results_cache = {}
+    
+    async def process_pose(ee_object):
         if "_" in ee_object:
             ee_object = " ".join(ee_object.split("_"))
-        for semantic_type in semantic_types:
-            for scene_object in scene_objects:
-                for constraint_type in constraint_types:
-                    is_semantically_safe, timings = majority_vote(semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=semantic_type, debug=debug), repetitions)
-                    all_timings += timings
-                    print("Majority vote: ", is_semantically_safe)
-                    if not semantic_type == "spatial_relationship":
-                        if semantic_type == "behavioral":
-                            if not is_semantically_safe:
-                                semantic_safety.append((ee_object, semantic_type, scene_object))
+            
+        args = (ee_object, None, None, "pose")
+        cache_key = (ee_object, "pose")
+        
+        if cache_key not in results_cache:
+            is_semantically_safe, timings = await majority_vote(
+                semantic_safety_request, args, repetitions=repetitions, debug=debug
+            )
+            all_timings.extend(timings)
+            results_cache[cache_key] = is_semantically_safe
+            print(f"Majority vote for pose {ee_object}: {is_semantically_safe}")
+            
+            if not is_semantically_safe:
+                semantic_safety.append((ee_object, "pose"))
+        
+        return results_cache[cache_key]
+
+    async def process_behavioral(ee_object, scene_object):
+        if "_" in ee_object:
+            ee_object = " ".join(ee_object.split("_"))
+            
+        args = (ee_object, scene_object, None, "behavioral")
+        cache_key = (ee_object, "behavioral", scene_object)
+        
+        if cache_key not in results_cache:
+            is_semantically_safe, timings = await majority_vote(
+                semantic_safety_request, args, repetitions=repetitions, debug=debug
+            )
+            all_timings.extend(timings)
+            results_cache[cache_key] = is_semantically_safe
+            print(f"Majority vote for behavioral {ee_object}, {scene_object}: {is_semantically_safe}")
+            
+            if not is_semantically_safe:
+                semantic_safety.append((ee_object, "behavioral", scene_object))
+        
+        return results_cache[cache_key]
+
+    async def process_spatial(ee_object, scene_object, constraint_type):
+        if "_" in ee_object:
+            ee_object = " ".join(ee_object.split("_"))
+            
+        args = (ee_object, scene_object, constraint_type, "spatial_relationship")
+        cache_key = (ee_object, "spatial_relationship", scene_object, constraint_type)
+        
+        if cache_key not in results_cache:
+            is_semantically_safe, timings = await majority_vote(
+                semantic_safety_request, args, repetitions=repetitions, debug=debug
+            )
+            all_timings.extend(timings)
+            results_cache[cache_key] = is_semantically_safe
+            print(f"Majority vote for spatial {ee_object}, {scene_object}, {constraint_type}: {is_semantically_safe}")
+            
+            if not is_semantically_safe:
+                already_covered = False
+                for constraint_in_group in constraint_groups[constraint_type]:
+                    unsafe_constraint = (ee_object, "spatial_relationship", scene_object, constraint_in_group)
+                    if unsafe_constraint in semantic_safety:
+                        already_covered = True
                         break
-                    else:
-                        if not is_semantically_safe:
-                            already_covered = False
-                            for constraint_in_group in constraint_groups[constraint_type]:
-                                unsafe_constraint = (ee_object, semantic_type, scene_object, constraint_in_group)
-                                if unsafe_constraint in semantic_safety:
-                                    already_covered = True
-                                    break
-                            if not already_covered:
-                                semantic_safety.append((ee_object, semantic_type, scene_object, constraint_type))
-                if semantic_type == "pose":
-                    if not is_semantically_safe:
-                        semantic_safety.append((ee_object, semantic_type))
-                    break
+                if not already_covered:
+                    semantic_safety.append((ee_object, "spatial_relationship", scene_object, constraint_type))
+        
+        return results_cache[cache_key]
+
+    # Process pose checks
+    pose_tasks = [process_pose(ee_object) for ee_object in ee_objects]
+    await asyncio.gather(*pose_tasks)
     
-    print()
-    print("Required semantic safety constraints: \n", semantic_safety)
+    # Process behavioral checks
+    behavioral_tasks = [
+        process_behavioral(ee_object, scene_object)
+        for ee_object in ee_objects
+        for scene_object in scene_objects
+    ]
+    await asyncio.gather(*behavioral_tasks)
+    
+    # Process spatial relationship checks
+    spatial_tasks = [
+        process_spatial(ee_object, scene_object, constraint_type)
+        for ee_object in ee_objects
+        for scene_object in scene_objects
+        for constraint_type in constraint_types
+    ]
+    await asyncio.gather(*spatial_tasks)
+    
+    print("\nRequired semantic safety constraints:\n", semantic_safety)
 
     # Get statistics on timings
     all_timings = np.array(all_timings)
 
-    print()
-    print("Timing statistics")
+    print("\nTiming statistics")
     print("Number of ee objects: ", len(ee_objects))
     print("Number of scene objects: ", len(scene_objects))
     print("Number of semantic types: ", len(semantic_types))
@@ -130,11 +194,6 @@ def required_semantic_safety_constraints(ee_objects, semantic_types, scene_objec
     print("Minimum: ", np.min(all_timings))
     print("Maximum: ", np.max(all_timings))
 
-    # Save timings to a file
-    if save_path:
-        print(f"Saving timings to {save_path}")
-        np.save(save_path, all_timings)
-
     return semantic_safety
 
 
@@ -145,69 +204,22 @@ def true_or_false():
         return bool(random.getrandbits(1))
     return random_boolean
 
+# Example usage
+async def main():
+    # Your parameters here
+    results = await required_semantic_safety_constraints(
+        ee_objects=["cup_of_water", "plastic_bowl"],
+        semantic_types=semantic_types,
+        scene_objects=["eggs", "microwave"],
+        constraint_types=constraint_types,
+        constraint_groups=constraint_groups,
+        repetitions=3,
+        debug=True
+    )
+    return results
 
 if __name__ == "__main__":
-    quick_test = False
-
-    if quick_test:
-        # semantic_type = "behavioral"
-        semantic_type = "spatial_relationship"
-           
-        # ee_object = "cup of water"
-        # ee_object = "bowl of soup"
-        # ee_object = "cup of tea"
-        # ee_object = "metal bowl"
-        # ee_object = "ceramic bowl"
-        ee_object = "plastic bowl"
-        # ee_object = "bowl"
-        # scene_object = "laptop"
-        scene_object = "microwave"
-        # constraint_type = "above"
-        constraint_type = "inside"
-
-        print(f"Semantic type: {semantic_type}")
-        # is_semantically_safe = majority_vote(true_or_false(), repetitions=11)
-        is_semantically_safe = majority_vote(semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=semantic_type, debug=True))
-        print("Majority vote: ", is_semantically_safe)
-    elif test_cup:
-        # semantic_type = "spatial_relationship"
-        # ee_object = "spray can"
-        # scene_object = "stove"
-        # constraint_type = "on"
-
-        semantic_type = "spatial_relationship"
-        ee_object = "cup of water"
-        scene_object = "frying pan"
-        constraint_type = "inside"
-
-        print(f"Semantic type: {semantic_type}")
-        is_semantically_safe = majority_vote(semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=semantic_type, debug=True))
-        print("Majority vote: ", is_semantically_safe)
-
-    else:
-        # semantic_types = ["spatial_relationship", "behavioral", "pose"]
-        constraint_types = ["above", "below", "around"]
-        # constraint_types = ["above", "below", "around", "inside"]
-
-        # ee_objects = ["cup of water", "dry sponge"]
-        ee_objects = ["bottle of water"]
-        # scene_objects = ["laptop", "books", "paper towel"]
-        scene_objects = ["eggs"]
-        repetitions = 3
-
-        semantic_safety = required_semantic_safety_constraints(ee_objects, semantic_types, scene_objects, constraint_types, constraint_groups, repetitions=repetitions, debug=True)
-
-        # for ee_object in ee_objects:
-        #     print(f"End effector object: {ee_object}")
-        #     for semantic_type in semantic_types:
-        #         print(f"Semantic type: {semantic_type}")
-        #         for scene_object in scene_objects:
-        #             print(f"Scene object: {scene_object}")
-        #             for constraint_type in constraint_types:
-        #                 print(f"Constraint type: {constraint_type}")
-        #                 is_semantically_safe = majority_vote(semantic_safety_request(ee_object, scene_object, constraint_type, semantic_type=semantic_type, debug=True))
-        #                 print("Majority vote: ", is_semantically_safe)
-        #                 if not semantic_type == "spatial_relationship":
-        #                     break
-        #             if semantic_type == "pose":
-        #                 break
+    start_time = time.time()
+    asyncio.run(main())
+    elapsed_time = time.time() - start_time
+    print(f"\nActual elapsed time: {elapsed_time} seconds")
