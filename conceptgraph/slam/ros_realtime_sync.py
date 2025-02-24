@@ -10,6 +10,7 @@ from pathlib import Path
 import pickle
 import gzip
 import pdb
+from termcolor import colored
 
 # Third-party imports
 import cv2
@@ -17,7 +18,9 @@ import numpy as np
 import scipy.ndimage as ndi
 import torch
 from PIL import Image
+import open3d as o3d
 from open3d.io import read_pinhole_camera_parameters
+from omegaconf import DictConfig
 import hydra
 from omegaconf import DictConfig
 import open_clip
@@ -67,7 +70,7 @@ from conceptgraph.utils.vis import (
     vis_result_fast, 
     save_video_detections
 )
-from conceptgraph.slam.slam_classes import MapEdgeMapping, MapObjectList
+from conceptgraph.slam.slam_classes import MapEdgeMapping, ProbabilisticMapObjectList, POCDObjectTypes
 from conceptgraph.slam.utils_no_sampling import (
     filter_gobs,
     filter_objects,
@@ -94,6 +97,8 @@ from conceptgraph.slam.mapping import (
 from conceptgraph.utils.model_utils import compute_clip_features_batched
 from conceptgraph.utils.general_utils import get_vis_out_path, cfg_to_dict, check_run_detections
 from conceptgraph.dataset.conceptgraphs_datautils import scale_intrinsics
+from conceptgraph.utils.llm import POCDLLM
+from transformers import pipeline
 
 import rclpy
 from rclpy.node import Node
@@ -109,6 +114,8 @@ from lsy_interfaces.srv import ConceptGraphQuery
 import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
 
+from enum import Enum
+
 
 DEBUG = True
 
@@ -117,20 +124,25 @@ class Subscriber(Node):
         super().__init__('subscriber')
         self.cfg = cfg
 
-        self.sub_info = MF_Subscriber(self, CameraInfo, 'camera/color/camera_info')
-        self.sub_color = MF_Subscriber(self, ROSImage, 'camera/color/image_raw')
-        # self.sub_pc = Subscriber(self, PointCloud2, 'camera/depth_registered/points')
-        # self.sub_pose = Subscriber(self, PoseStamped, 'state_estimator/pose_filtered')
+        # self.sub_info = MF_Subscriber(self, CameraInfo, 'camera/color/camera_info')
+        # self.sub_color = MF_Subscriber(self, ROSImage, 'camera/color/image_raw')
+        self.sub_info = MF_Subscriber(self, CameraInfo, 'spectacular_ai/camera_info')
+        self.sub_color = MF_Subscriber(self, ROSImage, 'spectacular_ai/color_image')
+
+        if cfg.use_pc_for_depth:
+            # self.sub_pc = MF_Subscriber(self, PointCloud2, 'camera/depth/color/points')
+            self.sub_depth = MF_Subscriber(self, PointCloud2, 'spectacular_ai/point_cloud/local')
+        else:
+            # self.sub_depth = MF_Subscriber(self, ROSImage, 'camera/aligned_depth_to_color/image_raw')
+            self.sub_depth = MF_Subscriber(self, ROSImage, 'spectacular_ai/depth_image')
+        
 
         MAX_MESSAGE_DELAY = 1/15
-        if cfg.use_pc_for_depth:
-            self.sub_pc = MF_Subscriber(self, PointCloud2, 'camera/depth/color/points')
-            self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_pc], 1, MAX_MESSAGE_DELAY)
-        else:
-            self.sub_depth = MF_Subscriber(self, ROSImage, 'camera/aligned_depth_to_color/image_raw')
-            self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth], 1, MAX_MESSAGE_DELAY)
-
-        self.callback_synchronizer.registerCallback(self.callback_sync)
+        # self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth], 1, MAX_MESSAGE_DELAY)
+        # self.callback_synchronizer.registerCallback(self.callback_sync)
+        self.sub_pose = MF_Subscriber(self, PoseStamped, 'spectacular_ai/pose_image_synced')
+        self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth, self.sub_pose], 1, MAX_MESSAGE_DELAY)
+        self.callback_synchronizer.registerCallback(self.callback_sync_sai)
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -141,14 +153,17 @@ class Subscriber(Node):
         self.depth = None
         self.pose = None
 
-
     def callback_sync(self, info_msg, color_msg, depth_msg):
-        if DEBUG:
-            print("Received synchronized data")
         self.ready_to_process = False
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
         self.pose = self._get_pose(time=color_msg.header.stamp)
-        # self.pose = self._get_pose(time=rclpy.time.Time())
+        if self.pose is not None:
+            self.ready_to_process = True
+
+    def callback_sync_sai(self, info_msg, color_msg, depth_msg, pose_msg):
+        self.ready_to_process = False
+        self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
+        self.pose = self._process_pose_sai(pose_msg)
         if self.pose is not None:
             self.ready_to_process = True
 
@@ -268,6 +283,31 @@ class Subscriber(Node):
         pose = pose.to(self.cfg.device).type(torch.float)
         return pose
     
+    def _process_pose_sai(self, pose_msg):
+        # Convert position + quaternion to pose matrix
+        pose = np.eye(4)
+        pose[:3, :3] = R.from_quat([
+            pose_msg.pose.orientation.x,
+            pose_msg.pose.orientation.y,
+            pose_msg.pose.orientation.z,
+            pose_msg.pose.orientation.w
+        ]).as_matrix()
+        pose[:3, 3] = np.array([
+            pose_msg.pose.position.x,
+            pose_msg.pose.position.y,
+            pose_msg.pose.position.z
+        ])
+        # Rotate if necessary
+        if self.cfg.rotate:
+            image_rotation = np.eye(4)
+            image_rotation[:3, :3] = R.from_euler('z', -90, degrees=True).as_matrix()
+            pose = pose @ image_rotation
+        # Convert to torch tensor
+        pose = torch.from_numpy(pose)
+        pose = pose.to(self.cfg.device).type(torch.float)
+        return pose
+        
+    
     def _process_intrinsics(self, info_msg):
         # Get camera intrinsics and convert to torch tensor
         K = np.array(info_msg.k).reshape(3, 3)
@@ -291,7 +331,7 @@ class Subscriber(Node):
             transform_msg = self.tf_buffer.lookup_transform("map", "camera_color_optical_frame", time)
             return self._process_pose(transform_msg)
         except Exception as e:
-            print(f"Failed to get pose: {e}")
+            # print(f"Failed to get pose: {e}")
             return None
     
 class QueryNode(Node):
@@ -368,9 +408,10 @@ def main(cfg : DictConfig):
                )
     cfg = process_cfg(cfg)
 
-    objects = MapObjectList(device=cfg.device)
+    objects = ProbabilisticMapObjectList(device=cfg.device)
+    objects_missing = ProbabilisticMapObjectList(device=cfg.device)
     map_edges = MapEdgeMapping(objects)
-    
+
     # output folder for this mapping experiment
     exp_out_path = get_exp_out_path(cfg.dataset_root, cfg.scene_id, cfg.exp_suffix)
 
@@ -413,7 +454,12 @@ def main(cfg : DictConfig):
         # Set the classes for the detection model
         detection_model.set_classes(obj_classes.get_classes_arr())
 
+        # LLM
+        print("Setting up LLM...")
         openai_client = get_openai_client()
+        pocd_llm = POCDLLM(cfg.llm_model_id, num_reprompt_tries=3)
+        print("LLM setup complete.")
+
         
     else:
         print("\n".join(["NOT Running detections..."] * 10))
@@ -483,7 +529,7 @@ def main(cfg : DictConfig):
             image = cv2.imread(str(color_path)) # This will in BGR color space
             blur_score = cv2.Laplacian(image, cv2.CV_64F).var()
             if blur_score < cfg.blur_threshold:
-                print(f"Frame {frame_idx} is too blurry, skipping...\n" * 10)
+                print(colored(f"Frame {frame_idx} is too blurry, skipping...\n" * 10, 'red'))
                 continue
 
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -653,10 +699,24 @@ def main(cfg : DictConfig):
                 )
 
         detection_list = make_detection_list_from_pcd_and_gobs(
-            obj_pcds_and_bboxes, gobs, color_path, obj_classes, frame_idx
+            obj_pcds_and_bboxes, gobs, color_path, obj_classes, frame_idx # TODO: ADD TIME HERE
         )
 
+        intrinsics_np = intrinsics.cpu().numpy()
+        # Note: Here we are passing in height as width (and vice-versa) since the images got flipped
+        expected_inds, expected_ids = objects.expectedToObserve(adjusted_pose, intrinsics_np, cfg['camera_params']['image_width'], cfg['camera_params']['image_height'], cfg.min_depth, cfg.max_depth)
+        # if DEBUG:
+        #     print(f"Expected to observe {len(expected_inds)} objects\n")
+        #     for i in expected_inds:
+        #         print(f"{i+1}: {objects[i]['class_name']}")
+
         if len(detection_list) == 0: # no detections, skip
+            if len(expected_inds) > 0:
+                # Objects have dissapeared. Update POCD probabilities
+                change_list = [cfg.pocd_default_change] * len(expected_inds)
+                change_std_list = [cfg.pocd_default_change_std] * len(expected_inds)
+                objects.updateProbability(change=change_list, std_change=change_std_list, ids=expected_ids, cap=cfg.pocd_response)
+                # objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)                
             continue
 
         # if no objects yet in the map,
@@ -670,8 +730,6 @@ def main(cfg : DictConfig):
                     "objects_this_frame": len(detection_list),
                 })
             continue 
-
-        # pdb.set_trace()
 
         ### compute similarities and then merge
         spatial_sim = compute_spatial_similarities(
@@ -695,6 +753,99 @@ def main(cfg : DictConfig):
             agg_sim=agg_sim, 
             detection_threshold=cfg['sim_threshold']  # Use the sim_threshold from the configuration
         )
+        match_ids = [objects[i]['id'] if i is not None else None for i in match_indices]
+
+        ### Perform POCD update
+        # # Use LLM to learn the object type: Dynamic (0), Semi-Static (1), or Static (2)
+        # obj_class_list = [obj["class_name"] for obj in detection_list]
+        # # object_type, retries = pocd_llm.run_inference(obj_class_list, max_response_length=200)
+        # # object_type, retries = pocd_llm.run_inference_single(obj_class_list, max_response_length=100)
+        # object_type = [0] * len(obj_class_list)
+        # retries = "NO LLM"
+        # print(colored(f"LLM input: {obj_class_list}", 'green'))
+        # print(colored(f"LLM output: {object_type}", 'green'))
+        # print(colored(f"LLM retries: {retries}", 'red'))
+        
+        # if expected_inds:
+        #     change_list = [cfg.pocd_default_change] * len(expected_inds)
+        #     std_change_list = [cfg.pocd_default_change_std] * len(expected_inds)
+        #     transform_list = [np.eye(4)] * len(expected_inds)
+        #     for detection_idx, object_idx in enumerate(match_indices):
+        #         if object_idx is None:
+        #             # Object is new. No POCD update
+        #             continue
+        #         if object_idx not in expected_inds:
+        #             # Object is not expected. No POCD update
+        #             continue
+
+        #         index = expected_inds.index(object_idx)
+        #         objects[object_idx]['type'] = POCDObjectTypes(object_type[detection_idx])
+        #         # Object has been observed. Evaluate change magnitude with ICP
+        #         detection_pcd = detection_list[detection_idx]['pcd']
+        #         object_pcd = objects[object_idx]['pcd']
+        #         transform_init = np.eye(4)
+        #         threshold = 0.01
+        #         registration_results = o3d.pipelines.registration.registration_icp(
+        #             detection_pcd, object_pcd, threshold, transform_init, o3d.pipelines.registration.TransformationEstimationPointToPoint(), o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=30))
+        #         std_change_list[index] = cfg.pocd_default_change_std
+        #         change_list[index] = np.linalg.norm(registration_results.transformation[:3, 3])
+        #         # std_change_list[index] = registration_results.inlier_rmse
+        #         transform_list[index] = registration_results.transformation
+            
+        #     for i, index in enumerate(expected_inds):
+        #         if change_list[i] == cfg.pocd_default_change:
+        #             objects[index]['type'] = POCDObjectTypes.DISSAPEARED
+        #             print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'red'))
+
+        #     objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
+        #     is_valid_detection = objects.getValidDetections(expected_ids) # Valid detection if measurement is an inlier
+            
+        #     # Remove objects based on POCD
+        #     pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
+        #     pruned_object_inds.sort(reverse=True)
+        #     for i in pruned_object_inds:
+        #         print(colored(f"Removing object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'red'))
+        #         objects_missing.append(i)
+        #         objects.pop(i)
+            
+        #     # Translate objects based on POCD
+        #     pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold)
+        #     for i in pruned_object_inds:
+        #         print(colored(f"Transforming object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'yellow'))
+        #         if i not in expected_inds:
+        #             continue
+        #         ind = expected_inds.index(i)
+        #         transform = transform_list[ind]
+        #         objects[i]['pcd'].transform(transform)
+                
+        #         oriented_bbox = objects[i]['bbox'].get_oriented_bounding_box()
+        #         oriented_bbox.translate(transform[:3, 3])
+        #         oriented_bbox.rotate(transform[:3, :3])
+        #         axis_bbox = oriented_bbox.get_axis_aligned_bounding_box()
+        #         objects[i]['bbox'] = axis_bbox
+
+        #     # Add back in objects bsed on POCD
+        #     # TODO: Add back in objects based on POCD
+
+        # ### Fix other variables affected by POCD Update
+        #     # Reject detections that have large changes
+        #     for i, change in enumerate(change_list):
+        #         if change <= cfg.detection_rejection_threshold:
+        #             continue
+        #         obj_ind = expected_inds[i]
+        #         if obj_ind not in match_indices:
+        #             continue
+        #         ind = match_indices.index(obj_ind)
+        #         match_indices.pop(ind)
+        #         detection_list.pop(ind)
+                
+        #     # Make the detection a new object if the previous objects were removed
+        #     num_objects = len(objects)
+        #     for i, ind in enumerate(match_indices):
+        #         if ind is not None and ind >= num_objects:
+        #             match_indices[i] = None
+        ### End POCD Update
+
 
         # Now merge the detected objects into the existing objects based on the match indices
         objects = merge_obj_matches(
@@ -711,9 +862,7 @@ def main(cfg : DictConfig):
         )
         map_edges = process_edges(match_indices, gobs, len(objects), objects, map_edges)
 
-        is_final_frame = False #frame_idx == len(dataset) - 1
-        if is_final_frame:
-            print("Final frame detected. Performing final post-processing...")
+        is_final_frame = False #frame_idx == len(dataset) - 1 ... Still needed for other function signatures
 
         ### Perform post-processing periodically if told so
 
@@ -754,7 +903,7 @@ def main(cfg : DictConfig):
             cfg["run_merge_final_frame"],
             frame_idx,
             is_final_frame,
-        ):
+        ) and len(objects) > 0:
             objects, map_edges = measure_time(merge_objects)(
                 merge_overlap_thresh=cfg["merge_overlap_thresh"],
                 merge_visual_sim_thresh=cfg["merge_visual_sim_thresh"],
@@ -783,6 +932,12 @@ def main(cfg : DictConfig):
                 adjusted_pose,
                 color_path
             )
+
+        ### Downsample
+        for obj in objects:
+            reduced_pcd = obj["pcd"].voxel_down_sample(cfg["downsample_voxel_size"])
+            obj['pcd'] = reduced_pcd
+            obj["n_points"] = len(reduced_pcd.points)
 
         if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_interval == 0):
             # save the pointcloud

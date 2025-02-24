@@ -35,9 +35,9 @@ obj_pcd_max_points: 1000
 debug_render: !!bool False
 vis_render: !!bool False
 
-denoise_interval: 10            # Run DBSCAN every k frame. This operation is heavy
-filter_interval: 5              # Filter objects that have too few associations or are too small
-merge_interval: 5              # Merge objects based on geometric and semantic similarity
+denoise_interval: 15            # Run DBSCAN every k frame. This operation is heavy
+filter_interval: 10              # Filter objects that have too few associations or are too small
+merge_interval: 10              # Merge objects based on geometric and semantic similarity
 # denoise_interval: 2           # Run DBSCAN every k frame. This operation is heavy
 # filter_interval: 2            # Filter objects that have too few associations or are too small
 # merge_interval: 2             # Merge objects based on geometric and semantic similarity

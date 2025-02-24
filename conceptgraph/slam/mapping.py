@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from typing import List, Optional
 
-from conceptgraph.slam.slam_classes import MapObjectList, DetectionList
+from conceptgraph.slam.slam_classes import ProbabilisticMapObjectList, DetectionList
 from conceptgraph.utils.general_utils import Timer
 from conceptgraph.utils.ious import (
     compute_iou_batch, 
@@ -12,7 +12,7 @@ from conceptgraph.utils.ious import (
     compute_3d_iou_accurate_batch, 
     compute_3d_giou_accurate_batch,
 )
-from conceptgraph.slam.utils import (
+from conceptgraph.slam.utils_no_sampling import (
     compute_overlap_matrix_general,
     merge_obj2_into_obj1, 
     compute_overlap_matrix_2set
@@ -23,7 +23,7 @@ owandb = OptionalWandB()
 tracker = MappingTracker()
 
 
-def compute_spatial_similarities(spatial_sim_type: str, detection_list: DetectionList, objects: MapObjectList, downsample_voxel_size) -> torch.Tensor:
+def compute_spatial_similarities(spatial_sim_type: str, detection_list: DetectionList, objects: ProbabilisticMapObjectList, downsample_voxel_size) -> torch.Tensor:
     det_bboxes = detection_list.get_stacked_values_torch('bbox')
     obj_bboxes = objects.get_stacked_values_torch('bbox')
 
@@ -43,7 +43,7 @@ def compute_spatial_similarities(spatial_sim_type: str, detection_list: Detectio
     
     return spatial_sim
 
-def compute_visual_similarities(detection_list: DetectionList, objects: MapObjectList) -> torch.Tensor:
+def compute_visual_similarities(detection_list: DetectionList, objects: ProbabilisticMapObjectList) -> torch.Tensor:
     '''
     Compute the visual similarities between the detections and the objects
     
@@ -106,7 +106,7 @@ def match_detections_to_objects(
 
 def merge_obj_matches(
     detection_list: DetectionList,
-    objects: MapObjectList,
+    objects: ProbabilisticMapObjectList,
     match_indices: List[Optional[int]],
     downsample_voxel_size: float,
     dbscan_remove_noise: bool,
@@ -114,19 +114,19 @@ def merge_obj_matches(
     dbscan_min_points: int,
     spatial_sim_type: str,
     device: str,
-) -> MapObjectList:
+) -> ProbabilisticMapObjectList:
     """
     Merges detected objects into existing objects based on a list of match indices.
 
     Args:
         detection_list (DetectionList): List of detected objects.
-        objects (MapObjectList): List of existing objects.
+        objects (ProbabilisticMapObjectList): List of existing objects.
         match_indices (List[Optional[int]]): Indices of existing objects each detected object matches with.
         downsample_voxel_size, dbscan_remove_noise, dbscan_eps, dbscan_min_points, spatial_sim_type, device:
             Parameters for merging and similarity computation.
 
     Returns:
-        MapObjectList: Updated list of existing objects with detected objects merged as appropriate.
+        ProbabilisticMapObjectList: Updated list of existing objects with detected objects merged as appropriate.
     """
     global tracker
     temp_curr_object_count = tracker.curr_object_count
@@ -172,8 +172,8 @@ def merge_obj_matches(
 def merge_detections_to_objects(
     downsample_voxel_size: float, dbscan_remove_noise: bool, dbscan_eps: float, dbscan_min_points: int,
     spatial_sim_type: str, device: str, match_method: str, phys_bias: float,
-    detection_list: DetectionList, objects: MapObjectList, agg_sim: torch.Tensor
-) -> MapObjectList:
+    detection_list: DetectionList, objects: ProbabilisticMapObjectList, agg_sim: torch.Tensor
+) -> ProbabilisticMapObjectList:
     for detected_obj_idx in range(agg_sim.shape[0]):
         if agg_sim[detected_obj_idx].max() == float('-inf'):
             objects.append(detection_list[detected_obj_idx])

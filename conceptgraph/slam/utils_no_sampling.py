@@ -20,7 +20,7 @@ import torch.nn.functional as F
 import faiss
 import uuid
 
-from conceptgraph.slam.slam_classes import MapEdgeMapping, MapObjectList, DetectionList, to_tensor
+from conceptgraph.slam.slam_classes import MapEdgeMapping, ProbabilisticMapObjectList, DetectionList, to_tensor, POCDObjectTypes
 
 from conceptgraph.utils.ious import compute_3d_iou, compute_3d_iou_accurate_batch, compute_iou_batch
 
@@ -295,6 +295,8 @@ def merge_obj2_into_obj1(obj1, obj2, downsample_voxel_size, dbscan_remove_noise,
     extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number']
     add_attributes = ['num_detections', 'num_obj_in_class']
     skip_attributes = ['id', 'class_name', 'is_background', 'new_counter', 'curr_obj_num', 'inst_color']  # 'inst_color' just keeps obj1's
+    pocd_skip_attributes = ['first_observed_time', 'last_observed_time', 'pocd_confidence', 'age', 'lost_time', 'a', 'b', 'mu', 'sig', 'eps', 'inlier', 'type']
+    skip_attributes += pocd_skip_attributes
     custom_handled = ['pcd', 'bbox', 'clip_ft', 'text_ft', 'n_points']
 
     # Check for unhandled keys and throw an error if there are
@@ -346,7 +348,7 @@ def merge_obj2_into_obj1(obj1, obj2, downsample_voxel_size, dbscan_remove_noise,
 
     return obj1
 
-def compute_overlap_matrix(objects: MapObjectList, downsample_voxel_size):
+def compute_overlap_matrix(objects: ProbabilisticMapObjectList, downsample_voxel_size):
     '''
     compute pairwise overlapping between objects in terms of point nearest neighbor. 
     Suppose we have a list of n point cloud, each of which is a o3d.geometry.PointCloud object. 
@@ -391,13 +393,13 @@ def compute_overlap_matrix(objects: MapObjectList, downsample_voxel_size):
 
     return overlap_matrix
 
-def compute_overlap_matrix_2set(objects_map: MapObjectList, objects_new: DetectionList, downsample_voxel_size) -> np.ndarray:
+def compute_overlap_matrix_2set(objects_map: ProbabilisticMapObjectList, objects_new: DetectionList, downsample_voxel_size) -> np.ndarray:
     """
     Computes pairwise overlap between two sets of objects based on point proximity. 
     This function evaluates how much each new object overlaps with each existing object in the map by calculating the ratio of points in one object's point cloud that are within a specified distance threshold of points in the other object's point cloud.
 
     Args:
-        objects_map (MapObjectList): The existing objects in the map, where each object includes a point cloud.
+        objects_map (ProbabilisticMapObjectList): The existing objects in the map, where each object includes a point cloud.
         objects_new (DetectionList): The new objects to be added to the map, each with its own point cloud.
         downsample_voxel_size (float): The distance threshold for considering points as overlapping. Points within this distance are counted as overlapping.
 
@@ -453,8 +455,8 @@ def compute_overlap_matrix_2set(objects_map: MapObjectList, objects_new: Detecti
             
             D, I = indices[i].search(points_new[j], 1) # search new object j in map object i
 
-            # overlap = (D < downsample_voxel_size ** 2).sum() # D is the squared distance
-            overlap = D.sum()
+            overlap = (D < downsample_voxel_size ** 2).sum() # D is the squared distance
+            # overlap = D.sum()
 
             # Calculate the ratio of points within the threshold
             overlap_matrix[i, j] = overlap / len(points_new[j])
@@ -462,17 +464,17 @@ def compute_overlap_matrix_2set(objects_map: MapObjectList, objects_new: Detecti
     return overlap_matrix
 
 # @profile
-def compute_overlap_matrix_general(objects_a: MapObjectList, objects_b = None, downsample_voxel_size = None) -> np.ndarray:
+def compute_overlap_matrix_general(objects_a: ProbabilisticMapObjectList, objects_b = None, downsample_voxel_size = None) -> np.ndarray:
     """
     Compute the overlap matrix between two sets of objects represented by their point clouds. This function can also perform self-comparison when `objects_b` is not provided. The overlap is quantified based on the proximity of points from one object to the nearest points of another, within a threshold specified by `downsample_voxel_size`.
 
     Parameters
     ----------
-    objects_a : MapObjectList
+    objects_a : ProbabilisticMapObjectList
         A list of object representations where each object contains a point cloud ('pcd') and bounding box ('bbox').
         This is the primary set of objects for comparison.
 
-    objects_b : Optional[MapObjectList]
+    objects_b : Optional[ProbabilisticMapObjectList]
         A second list of object representations similar to `objects_a`. If None, `objects_a` will be compared with itself to calculate self-overlap. Defaults to None.
 
     downsample_voxel_size : Optional[float]
@@ -579,7 +581,7 @@ def merge_overlap_objects(
     merge_overlap_thresh: float,
     merge_visual_sim_thresh: float,
     merge_text_sim_thresh: float,
-    objects: MapObjectList,
+    objects: ProbabilisticMapObjectList,
     overlap_matrix: np.ndarray,
     downsample_voxel_size: float,
     dbscan_remove_noise: bool,
@@ -649,7 +651,7 @@ def merge_overlap_objects(
 
     # Create a new list of objects excluding those that were merged
     new_objects = [obj for obj, keep in zip(objects, kept_objects) if keep]
-    objects = MapObjectList(new_objects)
+    objects = ProbabilisticMapObjectList(new_objects)
 
     return objects, index_updates
 
@@ -661,7 +663,7 @@ def denoise_objects(
     dbscan_min_points: int,
     spatial_sim_type: str,
     device: str,
-    objects: MapObjectList,
+    objects: ProbabilisticMapObjectList,
 ):
     tracker = DenoisingTracker()  # Get the singleton instance of DenoisingTracker
     logging.debug(f"Starting denoising with {len(objects)} objects")
@@ -699,7 +701,7 @@ def denoise_objects(
 def filter_objects(
     obj_min_points: int, 
     obj_min_detections: int, 
-    objects: MapObjectList, 
+    objects: ProbabilisticMapObjectList, 
     map_edges: MapEdgeMapping = None
 ):
     print("Before filtering:", len(objects))
@@ -713,8 +715,8 @@ def filter_objects(
             if map_edges is not None:
                 new_index_map[index] = len(objects_to_keep) - 1
 
-    # Create a new MapObjectList from the kept objects
-    new_objects = MapObjectList(objects_to_keep)
+    # Create a new ProbabilisticMapObjectList from the kept objects
+    new_objects = ProbabilisticMapObjectList(objects_to_keep)
     print("After filtering:", len(new_objects))
 
     # Update edges if provided
@@ -728,7 +730,7 @@ def merge_objects(
     merge_overlap_thresh: float,
     merge_visual_sim_thresh: float,
     merge_text_sim_thresh: float,
-    objects: MapObjectList,
+    objects: ProbabilisticMapObjectList,
     downsample_voxel_size: float,
     dbscan_remove_noise: bool,
     dbscan_eps: float,
@@ -1039,7 +1041,7 @@ def transform_detection_list(
 
 # @profile
 def make_detection_list_from_pcd_and_gobs(
-    obj_pcds_and_bboxes, gobs, color_path, obj_classes, image_idx
+    obj_pcds_and_bboxes, gobs, color_path, obj_classes, image_idx, time_stamp=0,
 ):
     '''
     This function makes a detection list for the objects
@@ -1062,6 +1064,24 @@ def make_detection_list_from_pcd_and_gobs(
         
         
         detected_object = {
+            'first_observed_time': time_stamp,
+            'last_observed_time': -1,
+            'pocd_confidence': 1, # Initialize as a / (a + b)
+            'age': -1,
+            'lost_time': -1,
+            'a': 2,
+            'b': 1,
+            'mu': 0,
+            'sig': 0.1,
+            # 'a_bk': 2,
+            # 'b_bk': 1,
+            # 'mu_bk': 0,
+            # 'sig_bk': 0.5,
+            # 'pocd_confidence-bk': 0,
+            'eps': 1e-5,
+            'inlier': True,
+            'type': POCDObjectTypes.STATIC, # 0: dynamic, 1: static, 2: dissapeared
+
             'id' : uuid.uuid4(),
             'image_idx' : [image_idx],                             # idx of the image
             
@@ -1287,7 +1307,7 @@ def processing_needed(
     return False
 
 
-def prepare_objects_save_vis(objects: MapObjectList, downsample_size: float=0.025):
+def prepare_objects_save_vis(objects: ProbabilisticMapObjectList, downsample_size: float=0.025):
     objects_to_save = copy.deepcopy(objects)
             
     # # Downsample the point cloud
@@ -1329,7 +1349,7 @@ def process_cfg(cfg: DictConfig):
 
     return cfg
 
-def prepare_objects_save_vis(objects: MapObjectList, downsample_size: float=0.025):
+def prepare_objects_save_vis(objects: ProbabilisticMapObjectList, downsample_size: float=0.025):
     objects_to_save = copy.deepcopy(objects)
             
     # # Downsample the point cloud

@@ -1,11 +1,14 @@
 
 from collections.abc import Iterable
+from enum import Enum
 import copy
 import matplotlib
 import torch
 import torch.nn.functional as F
 import numpy as np
 import open3d as o3d
+from scipy.special import gammaln
+from scipy.stats import norm, uniform
 
 def to_numpy(tensor):
     if isinstance(tensor, np.ndarray):
@@ -166,6 +169,280 @@ class MapObjectList(DetectionList):
             del new_obj['pcd_color_np']
             
             self.append(new_obj)
+
+class ProbabilisticMapObjectList(MapObjectList):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def expectedToObserve(self, camera_pose, intrinsics, img_height, img_width, min_depth, max_depth, visibility_threshold=0.35, projection_plane=1):
+        '''
+        Compute the expected objects to observe given the pose and field of view.
+
+        Args:
+            camera_pose: 4x4 numpy array representing the camera pose
+            fov_x: field of view (x-axis) in radians
+            fov_y: field of view (y-axis) in radians
+            projection_plane [Optional: int = 1]: distance from the camera to the projection plane
+        
+        Returns:
+            expected_object_indices: a list of indices of the expected objects to observe
+            expected_object_ids: a list of ids of the expected objects to observe
+        '''
+        expected_object_indices = []
+        expected_object_ids = []
+        
+        view_direction = np.array([0, 0, 1, 1]) # Generalized position vector: [x, y, z, 1]
+        left_direction = np.array([0, 1, 0, 1])
+        down_direction = np.array([1, 0, 0, 1])
+        view_direction = camera_pose @ view_direction
+        left_direction = camera_pose @ left_direction
+        down_direction = camera_pose @ down_direction
+
+        # camera_xyz = camera_pose[:3, 3]
+
+        # TODO: See if 1st method works. Time both and pick faster one.
+
+        # # See if camera should observe object
+        # # Calculation from https://math.stackexchange.com/questions/4144827/determine-if-a-point-is-in-a-cameras-field-of-view-3d
+        # for idx, obj in enumerate(self):
+        #     points = np.asarray(obj['pcd'].points)
+        #     total_points = points.shape[0]
+            
+        #     # 1. Ensure points are infront of camera
+        #     mask = np.dot(points, view_direction[:3]) > projection_plane
+        #     points = points[mask]
+        #     # 2. Ensure points are within the field of view
+        #     p = projection_plane * points / np.dot(points, view_direction[:3])[:, np.newaxis] - projection_plane * view_direction[:3]
+        #     left_proj = np.dot(p, left_direction[:3])
+        #     down_proj = np.dot(p, down_direction[:3])
+        #     mask = (left_proj > -fov_x/2) & (left_proj < fov_x/2) & (down_proj > -fov_y/2) & (down_proj < fov_y/2)
+        #     points = points[mask]
+        #     # 3. Ensure points are within the depth range
+        #     # TODO: Get rid of calculation in step 1 (Only keeping as a sanity check for now)
+        #     # mask = np.dot(points, view_direction[:3]) > min_depth
+        #     # points = points[mask]
+        #     # mask = np.dot(points, view_direction[:3]) < max_depth
+        #     # points = points[mask]
+
+        #     expected_points = points.shape[0]
+        #     if expected_points / total_points > 0.35:
+        #         expected_object_indices.append(idx)
+        #         expected_object_ids.append(obj['id'])
+        #         obj['expected_observation'] = True
+        #     else:
+        #         obj['expected_observation'] = False
+            
+            # Stuff that might be useful functions
+            # pcd_map_frame = obj['pcd']#.voxel_down_sample(voxel_size=0.25)
+            # pcd_camera_frame = pcd_map_frame.transform(camera_pose)
+            # pcd_camera_frame = pcd_camera_frame.crop(fov)        
+        
+        for idx, obj in enumerate(self):
+            points = np.asarray(obj['pcd'].points)
+            points = np.linalg.inv(camera_pose) @ np.vstack([points.T, np.ones(points.shape[0])])
+            uv = (intrinsics @ points).T
+            uv[:, 0] /= uv[:, 2]
+            uv[:, 1] /= uv[:, 2]
+
+            total_points = uv.shape[0]
+            valid_indices = (uv[:, 2] > 0) & (uv[:, 0] >= 0) & (uv[:, 0] < img_width) & \
+                        (uv[:, 1] >= 0) & (uv[:, 1] < img_height) & \
+                        (uv[:, 2] >= min_depth) & (uv[:, 2] <= max_depth)
+            uv = uv[valid_indices]
+            expected_points = uv.shape[0]
+
+            if expected_points / total_points > visibility_threshold:
+                expected_object_indices.append(idx)
+                expected_object_ids.append(obj['id'])
+            #     obj['expected_observation'] = True
+            # else:
+            #     obj['expected_observation'] = False
+            
+        return expected_object_indices, expected_object_ids
+    
+    def updateAge(self, time, ids=None):
+        '''
+        Update the age of the objects in the list
+
+        Args:
+            time: current time
+        '''
+        for obj in self:
+            obj['age'] = time - obj['last_observed_time']
+    
+    def updateLostTime(self, time, ids=None):
+        '''
+        Update the time since the object was last observed
+
+        Args:
+            time: current time
+        '''
+        for obj in self:
+            obj['lost_time'] = time - obj['last_observed_time']
+
+    def updateProbability(self, change=None, std_change=None, ids=None, cap=10):
+        '''
+        Update the probability that object is in the same location
+
+        Args:
+            change: some measure of change between the observation and preious knowledge
+            std_change: the standard deviation of the change
+        '''
+        idx = 0
+        for obj in self:
+            if ids is not None and obj['id'] not in ids:
+                continue
+
+            mu = obj['mu']
+            sig = obj['sig']
+            a = obj['a']
+            b = obj['b']
+            object_type = obj['type']
+            eps = obj['eps']
+            inlier = obj['inlier']
+
+            s_weight = 1
+            if object_type == POCDObjectTypes.DYNAMIC and not inlier:
+                s_weight = 0 # Drop fast
+            elif object_type == POCDObjectTypes.DYNAMIC and inlier:
+                s_weight = 3 # Rise slow
+            elif object_type == POCDObjectTypes.STATIC and not inlier:
+                s_weight = 3 # drop slow
+            elif object_type == POCDObjectTypes.STATIC and inlier:
+                s_weight = 0 # rise fast
+            elif object_type == POCDObjectTypes.DISSAPEARED and not inlier:
+                s_weight = 0 # drop very fast
+            elif object_type == POCDObjectTypes.DISSAPEARED and inlier:
+                s_weight = 5 # rise slow
+
+            s_weight = 0
+            object_type = min(1, object_type.value)
+            obj['type'] = POCDObjectTypes(object_type) # Default to setting the object to be static or dynamic for next iteration
+
+            tolerance = 20 * std_change[idx]
+
+            s_sq = 1 / (1 / np.square(sig) + 1 / np.square(std_change[idx])) 
+            m = s_sq * (mu / np.square(sig) + change[idx] / np.square(std_change[idx]))
+
+            k1, k2 = self.updateKSingle(obj, s_weight)
+
+            C1 = k1 * max(norm.pdf(change[idx], loc=mu, scale=sig), eps)
+            if abs(change[idx]) >= (tolerance - eps):
+                C2 = k2 * uniform.pdf(tolerance, loc=-tolerance, scale=2*tolerance)
+            else:
+                C2 = k2 * uniform.pdf(abs(change[idx]), loc=-tolerance, scale=2*tolerance)
+            C1 = max(eps, C1)
+            C2 = max(eps, C2)
+            C_norm = C1 + C2
+            C1 /= C_norm
+            C2 /= C_norm
+
+            inlier = True if C1 >= C2 else False
+
+            mu_prime = C1 * m + C2 * mu
+            sig = np.sqrt(C1 * (s_sq + np.square(m)) + C2 * (np.square(sig) + np.square(mu)) - np.square(mu_prime))
+
+            gamma = (a + object_type * s_weight + 1) / (a + b + s_weight + 1)
+            eta = (a + object_type * s_weight) / (a + b + s_weight + 1)
+            theta = C1 * gamma + C2 * eta
+            alpha = ((a + object_type * s_weight + 2) * (a + object_type * s_weight + 1)) / ((a + b + s_weight + 1) * (a + b + s_weight + 2))
+            beta = ((a + object_type * s_weight + 1) * (a + object_type * s_weight)) / ((a + b + s_weight + 1) * (a + b + s_weight + 2))
+            # nu = C1 * alpha + C2 * beta
+
+            obj['mu'] = mu_prime
+            theta_sq = np.square(theta)
+            a = (C1*theta*alpha + C2*beta*theta - theta_sq) / (theta_sq - C1*alpha - C2*beta)
+            b = (C1*theta*alpha + C2*beta*theta - theta_sq) * (1 - theta) / ((theta_sq - C1*alpha - C2*beta) * theta)
+            # a = (nu*theta - theta_sq) / (theta_sq - nu)
+            # b = (nu*theta - theta_sq) * (1 - theta) / ((theta_sq - nu) * theta)
+            # b = max(b, 0)
+            # a = max(a, 0)
+
+            if a > cap or b > cap:
+                ratio = max(a, b) / cap
+                a /= ratio
+                b /= ratio
+            
+            obj['inlier'] = inlier
+            obj['sig'] = sig
+            obj['a'] = a
+            obj['b'] = b
+            obj['pocd_confidence'] = a / (a + b)
+            print(f"class: {obj['class_name']}, a: {a}, b: {b}, pocd_confidence: {obj['pocd_confidence']}")
+
+            idx += 1
+
+    def updateKSingle(self, obj, k):
+        '''
+        Beta Distribution calculation in posterior stationarity update rule
+        '''
+
+        a = obj['a']
+        b = obj['b']
+        eps = obj['eps']
+        obj_type = obj['type'].value
+
+        lk1 = (gammaln(a+b) + gammaln(a + k*obj_type + 1) + gammaln(b + k - k*obj_type)) \
+            - (gammaln(a) + gammaln(b) + gammaln(a+b+k+1))
+        lk2 = (gammaln(a+b) + gammaln(a + k*obj_type) + gammaln(b + k - k*obj_type + 1)) \
+            - (gammaln(a) + gammaln(b) + gammaln(a+b+k+1))
+
+        k1 = np.exp(lk1)
+        k2 = np.exp(lk2)
+
+        ks = k1 + k2
+        k1 /= ks
+        k2 /= ks
+
+        k1 = max(eps, k1)
+        k2 = max(eps, k2)
+
+        return k1, k2
+
+    def pruneObjectsByProbability(self, upper_threshold: float=1, lower_threshold: float=0):
+        '''
+        Prune objects by probability
+
+        Args:
+            threshold: the threshold for which an object is considered to be moved
+
+        Returns:
+            pruned_object_ind: a list of indices for objects that are pruned
+            pruned_object_ids: a list of ids for objects that are pruned
+        '''
+        pruned_objects_inds = []
+        pruned_objects_ids = []
+        for idx, obj in enumerate(self):
+            if lower_threshold < obj['pocd_confidence'] < upper_threshold:
+                pruned_objects_inds.append(idx)
+                pruned_objects_ids.append(obj['id'])
+        return pruned_objects_inds, pruned_objects_ids
+    
+    def getValidDetections(self, ids=None):
+        """
+        Get the Valid detections in the based on if the detection is an inlier or outlier
+
+        Args:
+            ids: list of ids to filter the objects
+
+        Returns:
+            is_valid: list indicating if detection is valid or invalid
+        """
+        is_valid = []
+        for obj in self:
+            if ids is not None and obj['id'] not in ids:
+                continue
+            if obj['inlier']:
+                is_valid.append(True)
+            else:
+                is_valid.append(False)
+        return is_valid
+
+class POCDObjectTypes(Enum):
+    DYNAMIC = 0
+    STATIC = 1
+    DISSAPEARED = 2
+
 
 # not sure if I will use this 
 class MapEdge():

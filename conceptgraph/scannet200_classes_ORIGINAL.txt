@@ -75,6 +75,7 @@ fire alarm
 fire extinguisher
 fireplace
 floor
+folded chair
 furniture
 guitar
 guitar case

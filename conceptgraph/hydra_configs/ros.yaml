@@ -12,7 +12,7 @@ color_path: ${dataset_root}/${scene_id}/color
 device: cuda
 
 rotate: True
-use_pc_for_depth: True
+use_pc_for_depth: False
 
 blur_threshold: 100
 
@@ -20,32 +20,41 @@ min_depth: 0.8
 max_depth: 2.5
 subsample_interval: 15
 
+llm_model_id: "google/gemma-2b-it" # ["google/gemma-2b-it", "meta-llama/Meta-Llama-3.1-8B-Instruct"]
+
+pocd_default_change: 20 # Metres
+pocd_default_change_std: 0.1 # Metres
+pocd_removal_threshold: 0.65 # Percentage
+pocd_transformation_threshold: 0.75 # Percentage
+detection_rejection_threshold: 0.1 # Metres
+pocd_response: 25
+
 # Intel low resolution
-desired_height: 240
-desired_width: 424
+# desired_height: 240
+# desired_width: 424
 
 # Orbbec
-# desired_height: 180
-# desired_width: 320
+desired_height: 180
+desired_width: 320
 
 periodically_save_pcd: False 
 periodically_save_pcd_interval: 10
 
 camera_params:
   # ORBBEC FEMTO BOLT
-  # image_height: 720
-  # image_width: 1280
-  # fx: 750.0245971679688
-  # fy: 749.7333374023438
-  # cx: 636.2642822265625
-  # cy: 369.1966247558594
+  image_height: 720
+  image_width: 1280
+  fx: 750.0245971679688
+  fy: 749.7333374023438
+  cx: 636.2642822265625
+  cy: 369.1966247558594
   # INTEL REALSENSE D435i
-  image_height: 240
-  image_width: 424
-  fx: 303.17822265625
-  fy: 303.2071228027344
-  cx: 213.67611694335938
-  cy: 125.46749877929688
+  # image_height: 240
+  # image_width: 424
+  # fx: 303.17822265625
+  # fy: 303.2071228027344
+  # cx: 213.67611694335938
+  # cy: 125.46749877929688
   png_depth_scale: 1000 #for depth image in png format
   crop_edge: 0
 
