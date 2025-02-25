@@ -124,25 +124,25 @@ class Subscriber(Node):
         super().__init__('subscriber')
         self.cfg = cfg
 
-        # self.sub_info = MF_Subscriber(self, CameraInfo, 'camera/color/camera_info')
-        # self.sub_color = MF_Subscriber(self, ROSImage, 'camera/color/image_raw')
-        self.sub_info = MF_Subscriber(self, CameraInfo, 'spectacular_ai/camera_info')
-        self.sub_color = MF_Subscriber(self, ROSImage, 'spectacular_ai/color_image')
+        self.sub_info = MF_Subscriber(self, CameraInfo, 'camera/color/camera_info')
+        self.sub_color = MF_Subscriber(self, ROSImage, 'camera/color/image_raw')
+        # self.sub_info = MF_Subscriber(self, CameraInfo, 'spectacular_ai/camera_info')
+        # self.sub_color = MF_Subscriber(self, ROSImage, 'spectacular_ai/color_image')
 
         if cfg.use_pc_for_depth:
-            # self.sub_pc = MF_Subscriber(self, PointCloud2, 'camera/depth/color/points')
-            self.sub_depth = MF_Subscriber(self, PointCloud2, 'spectacular_ai/point_cloud/local')
+            self.sub_depth = MF_Subscriber(self, PointCloud2, 'camera/depth/points')
+            # self.sub_depth = MF_Subscriber(self, PointCloud2, 'spectacular_ai/point_cloud/local')
         else:
-            # self.sub_depth = MF_Subscriber(self, ROSImage, 'camera/aligned_depth_to_color/image_raw')
-            self.sub_depth = MF_Subscriber(self, ROSImage, 'spectacular_ai/depth_image')
+            self.sub_depth = MF_Subscriber(self, ROSImage, 'camera/depth/image_raw')
+            # self.sub_depth = MF_Subscriber(self, ROSImage, 'spectacular_ai/depth_image')
         
 
         MAX_MESSAGE_DELAY = 1/15
-        # self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth], 1, MAX_MESSAGE_DELAY)
-        # self.callback_synchronizer.registerCallback(self.callback_sync)
-        self.sub_pose = MF_Subscriber(self, PoseStamped, 'spectacular_ai/pose_image_synced')
-        self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth, self.sub_pose], 1, MAX_MESSAGE_DELAY)
-        self.callback_synchronizer.registerCallback(self.callback_sync_sai)
+        self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth], 1, MAX_MESSAGE_DELAY)
+        self.callback_synchronizer.registerCallback(self.callback_sync)
+        # self.sub_pose = MF_Subscriber(self, PoseStamped, 'spectacular_ai/pose_image_synced')
+        # self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth, self.sub_pose], 1, MAX_MESSAGE_DELAY)
+        # self.callback_synchronizer.registerCallback(self.callback_sync_sai)
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -164,8 +164,7 @@ class Subscriber(Node):
         self.ready_to_process = False
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
         self.pose = self._process_pose_sai(pose_msg)
-        if self.pose is not None:
-            self.ready_to_process = True
+        self.ready_to_process = True
 
     def _process_inputs(self, info_msg, color_msg, depth_msg):
         # Process all inputs
@@ -331,7 +330,7 @@ class Subscriber(Node):
             transform_msg = self.tf_buffer.lookup_transform("map", "camera_color_optical_frame", time)
             return self._process_pose(transform_msg)
         except Exception as e:
-            # print(f"Failed to get pose: {e}")
+            print(f"Failed to get pose: {e}")
             return None
     
 class QueryNode(Node):

@@ -16,8 +16,8 @@ use_pc_for_depth: False
 
 blur_threshold: 100
 
-min_depth: 0.8
-max_depth: 2.5
+min_depth: 0.5
+max_depth: 2.0
 subsample_interval: 15
 
 llm_model_id: "google/gemma-2b-it" # ["google/gemma-2b-it", "meta-llama/Meta-Llama-3.1-8B-Instruct"]
@@ -34,8 +34,8 @@ pocd_response: 25
 # desired_width: 424
 
 # Orbbec
-desired_height: 180
-desired_width: 320
+desired_height: 360
+desired_width: 640
 
 periodically_save_pcd: False 
 periodically_save_pcd_interval: 10

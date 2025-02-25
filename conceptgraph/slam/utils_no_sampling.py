@@ -1066,13 +1066,13 @@ def make_detection_list_from_pcd_and_gobs(
         detected_object = {
             'first_observed_time': time_stamp,
             'last_observed_time': -1,
-            'pocd_confidence': 1, # Initialize as a / (a + b)
+            'pocd_confidence': 2 / 3, # Initialize as a / (a + b)
             'age': -1,
             'lost_time': -1,
             'a': 2,
             'b': 1,
             'mu': 0,
-            'sig': 0.1,
+            'sig': 0.5,
             # 'a_bk': 2,
             # 'b_bk': 1,
             # 'mu_bk': 0,

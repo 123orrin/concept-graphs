@@ -189,53 +189,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             expected_object_ids: a list of ids of the expected objects to observe
         '''
         expected_object_indices = []
-        expected_object_ids = []
-        
-        view_direction = np.array([0, 0, 1, 1]) # Generalized position vector: [x, y, z, 1]
-        left_direction = np.array([0, 1, 0, 1])
-        down_direction = np.array([1, 0, 0, 1])
-        view_direction = camera_pose @ view_direction
-        left_direction = camera_pose @ left_direction
-        down_direction = camera_pose @ down_direction
-
-        # camera_xyz = camera_pose[:3, 3]
-
-        # TODO: See if 1st method works. Time both and pick faster one.
-
-        # # See if camera should observe object
-        # # Calculation from https://math.stackexchange.com/questions/4144827/determine-if-a-point-is-in-a-cameras-field-of-view-3d
-        # for idx, obj in enumerate(self):
-        #     points = np.asarray(obj['pcd'].points)
-        #     total_points = points.shape[0]
-            
-        #     # 1. Ensure points are infront of camera
-        #     mask = np.dot(points, view_direction[:3]) > projection_plane
-        #     points = points[mask]
-        #     # 2. Ensure points are within the field of view
-        #     p = projection_plane * points / np.dot(points, view_direction[:3])[:, np.newaxis] - projection_plane * view_direction[:3]
-        #     left_proj = np.dot(p, left_direction[:3])
-        #     down_proj = np.dot(p, down_direction[:3])
-        #     mask = (left_proj > -fov_x/2) & (left_proj < fov_x/2) & (down_proj > -fov_y/2) & (down_proj < fov_y/2)
-        #     points = points[mask]
-        #     # 3. Ensure points are within the depth range
-        #     # TODO: Get rid of calculation in step 1 (Only keeping as a sanity check for now)
-        #     # mask = np.dot(points, view_direction[:3]) > min_depth
-        #     # points = points[mask]
-        #     # mask = np.dot(points, view_direction[:3]) < max_depth
-        #     # points = points[mask]
-
-        #     expected_points = points.shape[0]
-        #     if expected_points / total_points > 0.35:
-        #         expected_object_indices.append(idx)
-        #         expected_object_ids.append(obj['id'])
-        #         obj['expected_observation'] = True
-        #     else:
-        #         obj['expected_observation'] = False
-            
-            # Stuff that might be useful functions
-            # pcd_map_frame = obj['pcd']#.voxel_down_sample(voxel_size=0.25)
-            # pcd_camera_frame = pcd_map_frame.transform(camera_pose)
-            # pcd_camera_frame = pcd_camera_frame.crop(fov)        
+        expected_object_ids = []        
         
         for idx, obj in enumerate(self):
             points = np.asarray(obj['pcd'].points)
@@ -254,9 +208,6 @@ class ProbabilisticMapObjectList(MapObjectList):
             if expected_points / total_points > visibility_threshold:
                 expected_object_indices.append(idx)
                 expected_object_ids.append(obj['id'])
-            #     obj['expected_observation'] = True
-            # else:
-            #     obj['expected_observation'] = False
             
         return expected_object_indices, expected_object_ids
     
@@ -303,17 +254,17 @@ class ProbabilisticMapObjectList(MapObjectList):
 
             s_weight = 1
             if object_type == POCDObjectTypes.DYNAMIC and not inlier:
-                s_weight = 0 # Drop fast
+                s_weight = 3 # Drop fast
             elif object_type == POCDObjectTypes.DYNAMIC and inlier:
-                s_weight = 3 # Rise slow
+                s_weight = 0 # Rise slow
             elif object_type == POCDObjectTypes.STATIC and not inlier:
-                s_weight = 3 # drop slow
+                s_weight = 0 # drop slow
             elif object_type == POCDObjectTypes.STATIC and inlier:
-                s_weight = 0 # rise fast
+                s_weight = 3 # rise fast
             elif object_type == POCDObjectTypes.DISSAPEARED and not inlier:
-                s_weight = 0 # drop very fast
+                s_weight = 5 # drop very fast
             elif object_type == POCDObjectTypes.DISSAPEARED and inlier:
-                s_weight = 5 # rise slow
+                s_weight = 0 # rise slow
 
             s_weight = 0
             object_type = min(1, object_type.value)
@@ -353,10 +304,6 @@ class ProbabilisticMapObjectList(MapObjectList):
             theta_sq = np.square(theta)
             a = (C1*theta*alpha + C2*beta*theta - theta_sq) / (theta_sq - C1*alpha - C2*beta)
             b = (C1*theta*alpha + C2*beta*theta - theta_sq) * (1 - theta) / ((theta_sq - C1*alpha - C2*beta) * theta)
-            # a = (nu*theta - theta_sq) / (theta_sq - nu)
-            # b = (nu*theta - theta_sq) * (1 - theta) / ((theta_sq - nu) * theta)
-            # b = max(b, 0)
-            # a = max(a, 0)
 
             if a > cap or b > cap:
                 ratio = max(a, b) / cap
@@ -368,7 +315,6 @@ class ProbabilisticMapObjectList(MapObjectList):
             obj['a'] = a
             obj['b'] = b
             obj['pocd_confidence'] = a / (a + b)
-            print(f"class: {obj['class_name']}, a: {a}, b: {b}, pocd_confidence: {obj['pocd_confidence']}")
 
             idx += 1
 
