@@ -22,11 +22,11 @@ subsample_interval: 15
 
 llm_model_id: "google/gemma-2b-it" # ["google/gemma-2b-it", "meta-llama/Meta-Llama-3.1-8B-Instruct"]
 
+use_pocd: True
 pocd_default_change: 20 # Metres
 pocd_default_change_std: 0.1 # Metres
-pocd_removal_threshold: 0.65 # Percentage
+pocd_removal_threshold: 0.0 # Percentage
 pocd_transformation_threshold: 0.75 # Percentage
-detection_rejection_threshold: 0.1 # Metres
 pocd_response: 25
 
 # Intel low resolution

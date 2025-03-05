@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import pickle
 # from conceptgraph.utils.vis import annotate_for_vlm, filter_detections, plot_edges_from_vlm
-from conceptgraph.slam.slam_classes import MapObjectList
+from conceptgraph.slam.slam_classes import MapObjectList, ProbabilisticMapObjectList
 from conceptgraph.slam.utils import prepare_objects_save_vis
 from conceptgraph.utils.ious import mask_subtract_contained
 import supervision as sv
@@ -720,7 +720,7 @@ def find_existing_image_path(base_path, extensions):
 def save_objects_for_frame(obj_all_frames_out_path, frame_idx, objects, obj_min_detections, adjusted_pose, color_path):
     save_path = obj_all_frames_out_path / f"{frame_idx:06d}.pkl.gz"
     filtered_objects = [obj for obj in objects if obj['num_detections'] >= obj_min_detections]
-    prepared_objects = prepare_objects_save_vis(MapObjectList(filtered_objects))
+    prepared_objects = prepare_objects_save_vis(ProbabilisticMapObjectList(filtered_objects))
     result = {
         "camera_pose": adjusted_pose, 
         "objects": prepared_objects,

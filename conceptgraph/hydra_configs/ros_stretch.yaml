@@ -23,7 +23,7 @@ end: 4000
 exp_suffix: r_mapping_stride2_short # helpful label to identify your mapping experiment
 
 save_video: !!bool False
-save_objects_all_frames: !!bool False
+save_objects_all_frames: !!bool True
 
 downsample_voxel_size: 0.01
 obj_pcd_max_points: 1000

@@ -266,7 +266,6 @@ class ProbabilisticMapObjectList(MapObjectList):
             elif object_type == POCDObjectTypes.DISSAPEARED and inlier:
                 s_weight = 0 # rise slow
 
-            s_weight = 0
             object_type = min(1, object_type.value)
             obj['type'] = POCDObjectTypes(object_type) # Default to setting the object to be static or dynamic for next iteration
 

@@ -304,8 +304,7 @@ class Subscriber(Node):
         # Convert to torch tensor
         pose = torch.from_numpy(pose)
         pose = pose.to(self.cfg.device).type(torch.float)
-        return pose
-        
+        return pose 
     
     def _process_intrinsics(self, info_msg):
         # Get camera intrinsics and convert to torch tensor
@@ -467,8 +466,15 @@ def main(cfg : DictConfig):
     save_hydra_config(detections_exp_cfg, exp_out_path, is_detection_config=True)
 
     if cfg.save_objects_all_frames:
-        obj_all_frames_out_path = exp_out_path / "saved_obj_all_frames" / f"det_{cfg.detections_exp_suffix}"
+        obj_all_frames_out_path = get_exp_out_path(cfg.dataset_root, cfg.scene_id, "saved_obj_all_frames")
         os.makedirs(obj_all_frames_out_path, exist_ok=True)
+
+    if cfg.rotate:
+        vis_camera_width = cfg.desired_height
+        vis_camera_height = cfg.desired_width
+    else:
+        vis_camera_width = cfg.desired_width
+        vis_camera_height = cfg.desired_height
 
     exit_early_flag = False
     counter = 0
@@ -628,8 +634,6 @@ def main(cfg : DictConfig):
                 # if no detections, throw an error
                 raise FileNotFoundError(f"No detections found for frame {frame_idx}at paths \n{det_exp_pkl_path / color_path.stem} or \n{det_exp_pkl_path / f'{int(color_path.stem):06}'}.")
 
-        # pdb.set_trace()
-
         # get pose, this is the untrasformed pose.
         unt_pose = pose_tensor
         unt_pose = unt_pose.cpu().numpy()
@@ -637,12 +641,6 @@ def main(cfg : DictConfig):
         # Don't apply any transformation otherwise
         adjusted_pose = unt_pose
         
-        if cfg.rotate:
-            vis_camera_width = cfg.desired_height
-            vis_camera_height = cfg.desired_width
-        else:
-            vis_camera_width = cfg.desired_width
-            vis_camera_height = cfg.desired_height
         prev_adjusted_pose = orr_log_camera(intrinsics, adjusted_pose, prev_adjusted_pose, vis_camera_width, vis_camera_height, frame_idx)
 
         orr_log_rgb_image(color_path)
@@ -704,10 +702,8 @@ def main(cfg : DictConfig):
         intrinsics_np = intrinsics.cpu().numpy()
         # Note: Here we are passing in height as width (and vice-versa) since the images got flipped
         expected_inds, expected_ids = objects.expectedToObserve(adjusted_pose, intrinsics_np, cfg['camera_params']['image_width'], cfg['camera_params']['image_height'], cfg.min_depth, cfg.max_depth)
-        # if DEBUG:
-        #     print(f"Expected to observe {len(expected_inds)} objects\n")
-        #     for i in expected_inds:
-        #         print(f"{i+1}: {objects[i]['class_name']}")
+        for i in expected_inds:
+            print(colored(f"Expected to see {objects[i]['class_name']}", 'green'))
 
         if len(detection_list) == 0: # no detections, skip
             if len(expected_inds) > 0:
@@ -715,7 +711,7 @@ def main(cfg : DictConfig):
                 change_list = [cfg.pocd_default_change] * len(expected_inds)
                 change_std_list = [cfg.pocd_default_change_std] * len(expected_inds)
                 objects.updateProbability(change=change_list, std_change=change_std_list, ids=expected_ids, cap=cfg.pocd_response)
-                # objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)                
+                objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)                
             continue
 
         # if no objects yet in the map,
@@ -752,98 +748,96 @@ def main(cfg : DictConfig):
             agg_sim=agg_sim, 
             detection_threshold=cfg['sim_threshold']  # Use the sim_threshold from the configuration
         )
-        match_ids = [objects[i]['id'] if i is not None else None for i in match_indices]
 
-        ### Perform POCD update
-        # # Use LLM to learn the object type: Dynamic (0), Semi-Static (1), or Static (2)
-        # obj_class_list = [obj["class_name"] for obj in detection_list]
-        # # object_type, retries = pocd_llm.run_inference(obj_class_list, max_response_length=200)
-        # # object_type, retries = pocd_llm.run_inference_single(obj_class_list, max_response_length=100)
-        # object_type = [0] * len(obj_class_list)
-        # retries = "NO LLM"
-        # print(colored(f"LLM input: {obj_class_list}", 'green'))
-        # print(colored(f"LLM output: {object_type}", 'green'))
-        # print(colored(f"LLM retries: {retries}", 'red'))
-        
-        # if expected_inds:
-        #     change_list = [cfg.pocd_default_change] * len(expected_inds)
-        #     std_change_list = [cfg.pocd_default_change_std] * len(expected_inds)
-        #     transform_list = [np.eye(4)] * len(expected_inds)
-        #     for detection_idx, object_idx in enumerate(match_indices):
-        #         if object_idx is None:
-        #             # Object is new. No POCD update
-        #             continue
-        #         if object_idx not in expected_inds:
-        #             # Object is not expected. No POCD update
-        #             continue
+        ##### Perform POCD update
+        if cfg.use_pocd:
+            match_ids = [objects[i]['id'] if i is not None else None for i in match_indices]
+            # # Use LLM to learn the object type: Dynamic (0), Semi-Static (1), or Static (2)
+            obj_class_list = [obj["class_name"] for obj in detection_list]
+            # # object_type, retries = pocd_llm.run_inference(obj_class_list, max_response_length=200)
+            # # object_type, retries = pocd_llm.run_inference_single(obj_class_list, max_response_length=100)
+            object_type = [0] * len(obj_class_list)
+            # retries = "NO LLM"
+            # print(colored(f"LLM input: {obj_class_list}", 'green'))
+            # print(colored(f"LLM output: {object_type}", 'green'))
+            # print(colored(f"LLM retries: {retries}", 'red'))
+            
+            if expected_inds:
+                change_list = [cfg.pocd_default_change] * len(expected_inds)
+                std_change_list = [cfg.pocd_default_change_std] * len(expected_inds)
+                transform_list = [np.eye(4)] * len(expected_inds)
+                for detection_idx, object_idx in enumerate(match_indices):
+                    if object_idx is None:
+                        # Object is new. No POCD update
+                        continue
+                    if object_idx not in expected_inds:
+                        # Object is not expected. No POCD update
+                        continue
 
-        #         index = expected_inds.index(object_idx)
-        #         objects[object_idx]['type'] = POCDObjectTypes(object_type[detection_idx])
-        #         # Object has been observed. Evaluate change magnitude with ICP
-        #         detection_pcd = detection_list[detection_idx]['pcd']
-        #         object_pcd = objects[object_idx]['pcd']
-        #         transform_init = np.eye(4)
-        #         threshold = 0.01
-        #         registration_results = o3d.pipelines.registration.registration_icp(
-        #             detection_pcd, object_pcd, threshold, transform_init, o3d.pipelines.registration.TransformationEstimationPointToPoint(), o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=30))
-        #         std_change_list[index] = cfg.pocd_default_change_std
-        #         change_list[index] = np.linalg.norm(registration_results.transformation[:3, 3])
-        #         # std_change_list[index] = registration_results.inlier_rmse
-        #         transform_list[index] = registration_results.transformation
-            
-        #     for i, index in enumerate(expected_inds):
-        #         if change_list[i] == cfg.pocd_default_change:
-        #             objects[index]['type'] = POCDObjectTypes.DISSAPEARED
-        #             print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'red'))
-
-        #     objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
-        #     is_valid_detection = objects.getValidDetections(expected_ids) # Valid detection if measurement is an inlier
-            
-        #     # Remove objects based on POCD
-        #     pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
-        #     pruned_object_inds.sort(reverse=True)
-        #     for i in pruned_object_inds:
-        #         print(colored(f"Removing object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'red'))
-        #         objects_missing.append(i)
-        #         objects.pop(i)
-            
-        #     # Translate objects based on POCD
-        #     pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold)
-        #     for i in pruned_object_inds:
-        #         print(colored(f"Transforming object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'yellow'))
-        #         if i not in expected_inds:
-        #             continue
-        #         ind = expected_inds.index(i)
-        #         transform = transform_list[ind]
-        #         objects[i]['pcd'].transform(transform)
+                    index = expected_inds.index(object_idx)
+                    objects[object_idx]['type'] = POCDObjectTypes(object_type[detection_idx])
+                    # Object has been observed. Evaluate change magnitude with ICP
+                    detection_pcd = detection_list[detection_idx]['pcd']
+                    object_pcd = objects[object_idx]['pcd']
+                    transform_init = np.eye(4)
+                    threshold = 0.01
+                    registration_results = o3d.pipelines.registration.registration_icp(
+                        detection_pcd, object_pcd, threshold, transform_init, o3d.pipelines.registration.TransformationEstimationPointToPoint(), o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=30))
+                    std_change_list[index] = cfg.pocd_default_change_std
+                    change_list[index] = np.linalg.norm(registration_results.transformation[:3, 3])
+                    # std_change_list[index] = registration_results.inlier_rmse
+                    transform_list[index] = registration_results.transformation
                 
-        #         oriented_bbox = objects[i]['bbox'].get_oriented_bounding_box()
-        #         oriented_bbox.translate(transform[:3, 3])
-        #         oriented_bbox.rotate(transform[:3, :3])
-        #         axis_bbox = oriented_bbox.get_axis_aligned_bounding_box()
-        #         objects[i]['bbox'] = axis_bbox
+                for i, index in enumerate(expected_inds):
+                    if change_list[i] == cfg.pocd_default_change:
+                        objects[index]['type'] = POCDObjectTypes.DISSAPEARED
+                        print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'cyan'))
 
-        #     # Add back in objects bsed on POCD
-        #     # TODO: Add back in objects based on POCD
-
-        # ### Fix other variables affected by POCD Update
-        #     # Reject detections that have large changes
-        #     for i, change in enumerate(change_list):
-        #         if change <= cfg.detection_rejection_threshold:
-        #             continue
-        #         obj_ind = expected_inds[i]
-        #         if obj_ind not in match_indices:
-        #             continue
-        #         ind = match_indices.index(obj_ind)
-        #         match_indices.pop(ind)
-        #         detection_list.pop(ind)
+                objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
+                # is_valid_detection = objects.getValidDetections(expected_ids) # Valid detection if measurement is an inlier
                 
-        #     # Make the detection a new object if the previous objects were removed
-        #     num_objects = len(objects)
-        #     for i, ind in enumerate(match_indices):
-        #         if ind is not None and ind >= num_objects:
-        #             match_indices[i] = None
-        ### End POCD Update
+                # Remove objects based on POCD
+                pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
+                pruned_object_inds.sort(reverse=True)
+                for i in pruned_object_inds:
+                    print(colored(f"Removing object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'red'))
+                    objects_missing.append(i)
+                    objects.pop(i)
+                
+            #     # Translate objects based on POCD
+            #     pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold)
+            #     for i in pruned_object_inds:
+            #         print(colored(f"Transforming object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'yellow'))
+            #         if i not in expected_inds:
+            #             continue
+            #         ind = expected_inds.index(i)
+            #         transform = transform_list[ind]
+            #         objects[i]['pcd'].transform(transform)
+                    
+            #         oriented_bbox = objects[i]['bbox'].get_oriented_bounding_box()
+            #         oriented_bbox.translate(transform[:3, 3])
+            #         oriented_bbox.rotate(transform[:3, :3])
+            #         axis_bbox = oriented_bbox.get_axis_aligned_bounding_box()
+            #         objects[i]['bbox'] = axis_bbox
+
+            #     # Add back in objects bsed on POCD
+            #     # TODO: Add back in objects based on POCD
+
+            ### Fix other variables affected by POCD Update
+                # Reject detections that have large changes
+                for obj_ind in pruned_object_inds:
+                    if obj_ind not in match_indices:
+                        continue
+                    ind = match_indices.index(obj_ind)
+                    match_indices.pop(ind)
+                    detection_list.pop(ind)
+                    
+            #     # Make the detection a new object if the previous objects were removed
+            #     num_objects = len(objects)
+            #     for i, ind in enumerate(match_indices):
+            #         if ind is not None and ind >= num_objects:
+            #             match_indices[i] = None
+        ##### End POCD Update
 
 
         # Now merge the detected objects into the existing objects based on the match indices

@@ -1080,7 +1080,7 @@ def make_detection_list_from_pcd_and_gobs(
             # 'pocd_confidence-bk': 0,
             'eps': 1e-5,
             'inlier': True,
-            'type': POCDObjectTypes.STATIC, # 0: dynamic, 1: static, 2: dissapeared
+            'type': POCDObjectTypes.DYNAMIC, # 0: dynamic, 1: static, 2: dissapeared
 
             'id' : uuid.uuid4(),
             'image_idx' : [image_idx],                             # idx of the image

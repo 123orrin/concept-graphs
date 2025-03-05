@@ -1332,7 +1332,7 @@ def prepare_objects_save_vis(objects: MapObjectList, downsample_size: float=0.02
     for i in range(len(objects_to_save)):
         for k in list(objects_to_save[i].keys()):
             if k not in [
-                'pcd', 'bbox', 'clip_ft', 'text_ft', 'class_id', 'num_detections', 'inst_color'
+                'id', 'class_name', 'pocd_confidence', 'pcd', 'bbox', 'clip_ft', 'text_ft', 'class_id', 'num_detections', 'inst_color'
             ]:
                 del objects_to_save[i][k]
                 
