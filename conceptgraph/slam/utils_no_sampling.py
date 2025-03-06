@@ -295,9 +295,9 @@ def merge_obj2_into_obj1(obj1, obj2, downsample_voxel_size, dbscan_remove_noise,
     extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number']
     add_attributes = ['num_detections', 'num_obj_in_class']
     skip_attributes = ['id', 'class_name', 'is_background', 'new_counter', 'curr_obj_num', 'inst_color']  # 'inst_color' just keeps obj1's
-    pocd_skip_attributes = ['first_observed_time', 'last_observed_time', 'pocd_confidence', 'age', 'lost_time', 'a', 'b', 'mu', 'sig', 'eps', 'inlier', 'type']
-    skip_attributes += pocd_skip_attributes
+    pocd_attributes = ['first_observed_time', 'last_observed_time', 'pocd_confidence', 'age', 'lost_time', 'a', 'b', 'mu', 'sig', 'eps', 'inlier', 'type']
     custom_handled = ['pcd', 'bbox', 'clip_ft', 'text_ft', 'n_points']
+    skip_attributes += pocd_attributes
 
     # Check for unhandled keys and throw an error if there are
     all_handled_keys = set(extend_attributes + add_attributes + skip_attributes + custom_handled)
@@ -1073,11 +1073,6 @@ def make_detection_list_from_pcd_and_gobs(
             'b': 1,
             'mu': 0,
             'sig': 0.5,
-            # 'a_bk': 2,
-            # 'b_bk': 1,
-            # 'mu_bk': 0,
-            # 'sig_bk': 0.5,
-            # 'pocd_confidence-bk': 0,
             'eps': 1e-5,
             'inlier': True,
             'type': POCDObjectTypes.DYNAMIC, # 0: dynamic, 1: static, 2: dissapeared

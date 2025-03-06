@@ -63,7 +63,7 @@ class DetectionList(list):
         '''
         new_self = type(self)()
         for i in index:
-            new_self.append(self[i])
+            new_append(self[i])
         return new_self
     
     def slice_by_mask(self, mask: Iterable[bool]):
@@ -73,7 +73,7 @@ class DetectionList(list):
         new_self = type(self)()
         for i, m in enumerate(mask):
             if m:
-                new_self.append(self[i])
+                new_append(self[i])
         return new_self
     
     def get_most_common_class(self) -> list[int]:
@@ -168,7 +168,7 @@ class MapObjectList(DetectionList):
             del new_obj['bbox_np']
             del new_obj['pcd_color_np']
             
-            self.append(new_obj)
+            append(new_obj)
 
 class ProbabilisticMapObjectList(MapObjectList):
     def __init__(self, *args, **kwargs):
@@ -231,17 +231,17 @@ class ProbabilisticMapObjectList(MapObjectList):
         for obj in self:
             obj['lost_time'] = time - obj['last_observed_time']
 
-    def updateProbability(self, change=None, std_change=None, ids=None, cap=10):
+    def updateProbability(self, change_list=None, std_change_list=None, ids=None, cap=10):
         '''
         Update the probability that object is in the same location
 
         Args:
-            change: some measure of change between the observation and preious knowledge
+            change: some measure of change between the observation and previous knowledge
             std_change: the standard deviation of the change
         '''
         idx = 0
         for obj in self:
-            if ids is not None and obj['id'] not in ids:
+            if (ids is not None) and (obj['id'] not in ids):
                 continue
 
             mu = obj['mu']
@@ -251,6 +251,8 @@ class ProbabilisticMapObjectList(MapObjectList):
             object_type = obj['type']
             eps = obj['eps']
             inlier = obj['inlier']
+            change = change_list[idx]
+            std_change = std_change_list[idx]
 
             s_weight = 1
             if object_type == POCDObjectTypes.DYNAMIC and not inlier:
@@ -267,20 +269,20 @@ class ProbabilisticMapObjectList(MapObjectList):
                 s_weight = 0 # rise slow
 
             object_type = min(1, object_type.value)
-            obj['type'] = POCDObjectTypes(object_type) # Default to setting the object to be static or dynamic for next iteration
+            obj['type'] = POCDObjectTypes(object_type)
 
-            tolerance = 20 * std_change[idx]
+            tolerance = 20 * std_change
 
-            s_sq = 1 / (1 / np.square(sig) + 1 / np.square(std_change[idx])) 
-            m = s_sq * (mu / np.square(sig) + change[idx] / np.square(std_change[idx]))
+            s_sq = 1 / (1 / np.square(sig) + 1 / np.square(std_change)) 
+            m = s_sq * (mu / np.square(sig) + change / np.square(std_change))
 
             k1, k2 = self.updateKSingle(obj, s_weight)
 
-            C1 = k1 * max(norm.pdf(change[idx], loc=mu, scale=sig), eps)
-            if abs(change[idx]) >= (tolerance - eps):
-                C2 = k2 * uniform.pdf(tolerance, loc=-tolerance, scale=2*tolerance)
+            C1 = k1 * max(norm.pdf(change, loc=mu, scale=sig), eps)
+            if abs(change) >= (tolerance - eps):
+                C2 = k2 * uniform.pdf(tolerance, loc=0, scale=tolerance)
             else:
-                C2 = k2 * uniform.pdf(abs(change[idx]), loc=-tolerance, scale=2*tolerance)
+                C2 = k2 * uniform.pdf(abs(change), loc=0, scale=tolerance)
             C1 = max(eps, C1)
             C2 = max(eps, C2)
             C_norm = C1 + C2
@@ -288,48 +290,48 @@ class ProbabilisticMapObjectList(MapObjectList):
             C2 /= C_norm
 
             inlier = True if C1 >= C2 else False
+            obj['inlier'] = inlier
 
             mu_prime = C1 * m + C2 * mu
             sig = np.sqrt(C1 * (s_sq + np.square(m)) + C2 * (np.square(sig) + np.square(mu)) - np.square(mu_prime))
+            obj['sig'] = sig
 
             gamma = (a + object_type * s_weight + 1) / (a + b + s_weight + 1)
             eta = (a + object_type * s_weight) / (a + b + s_weight + 1)
             theta = C1 * gamma + C2 * eta
             alpha = ((a + object_type * s_weight + 2) * (a + object_type * s_weight + 1)) / ((a + b + s_weight + 1) * (a + b + s_weight + 2))
             beta = ((a + object_type * s_weight + 1) * (a + object_type * s_weight)) / ((a + b + s_weight + 1) * (a + b + s_weight + 2))
-            # nu = C1 * alpha + C2 * beta
+            # nu = C1 * alpha+ C2 * beta
 
             obj['mu'] = mu_prime
             theta_sq = np.square(theta)
-            a = (C1*theta*alpha + C2*beta*theta - theta_sq) / (theta_sq - C1*alpha - C2*beta)
-            b = (C1*theta*alpha + C2*beta*theta - theta_sq) * (1 - theta) / ((theta_sq - C1*alpha - C2*beta) * theta)
+            a = (C1*theta*alpha+ C2*beta*theta - theta_sq) / (theta_sq - C1*alpha- C2*beta)
+            b = (C1*theta*alpha+ C2*beta*theta - theta_sq) * (1 - theta) / ((theta_sq - C1*alpha- C2*beta) * theta)
 
             if a > cap or b > cap:
                 ratio = max(a, b) / cap
                 a /= ratio
                 b /= ratio
-            
-            obj['inlier'] = inlier
-            obj['sig'] = sig
             obj['a'] = a
             obj['b'] = b
-            obj['pocd_confidence'] = a / (a + b)
 
+            confidence = a / (a + b)
+            obj['pocd_confidence'] = confidence
+            
             idx += 1
-
+        
     def updateKSingle(self, obj, k):
         '''
         Beta Distribution calculation in posterior stationarity update rule
         '''
-
         a = obj['a']
         b = obj['b']
+        object_type = obj['type'].value
         eps = obj['eps']
-        obj_type = obj['type'].value
 
-        lk1 = (gammaln(a+b) + gammaln(a + k*obj_type + 1) + gammaln(b + k - k*obj_type)) \
+        lk1 = (gammaln(a + b) + gammaln(a + k*object_type + 1) + gammaln(b + k - k*object_type)) \
             - (gammaln(a) + gammaln(b) + gammaln(a+b+k+1))
-        lk2 = (gammaln(a+b) + gammaln(a + k*obj_type) + gammaln(b + k - k*obj_type + 1)) \
+        lk2 = (gammaln(a + b) + gammaln(a + k*object_type) + gammaln(b + k - k*object_type + 1)) \
             - (gammaln(a) + gammaln(b) + gammaln(a+b+k+1))
 
         k1 = np.exp(lk1)

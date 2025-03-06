@@ -11,6 +11,7 @@ import pickle
 import gzip
 import pdb
 from termcolor import colored
+import pandas as pd
 
 # Third-party imports
 import cv2
@@ -152,6 +153,7 @@ class Subscriber(Node):
         self.color = None
         self.depth = None
         self.pose = None
+        self.changes = np.array([])
 
     def callback_sync(self, info_msg, color_msg, depth_msg):
         self.ready_to_process = False
@@ -485,6 +487,7 @@ def main(cfg : DictConfig):
     query_service_node._attach_model(clip_model)
     query_service_node._attach_tokenizer(clip_tokenizer)
     query_service_node._attach_objects(objects)
+    one_id = None
     while rclpy.ok():
         
         while not node.ready_to_process:
@@ -724,6 +727,18 @@ def main(cfg : DictConfig):
                     "total_objects_so_far": tracker.get_total_objects(),
                     "objects_this_frame": len(detection_list),
                 })
+            
+            query_service_node._attach_objects(objects)
+            if cfg.save_objects_all_frames:
+                save_objects_for_frame(
+                    obj_all_frames_out_path,
+                    frame_idx,
+                    objects,
+                    # cfg.obj_min_detections,
+                    0,
+                    adjusted_pose,
+                    color_path
+                )
             continue 
 
         ### compute similarities and then merge
@@ -756,12 +771,13 @@ def main(cfg : DictConfig):
             obj_class_list = [obj["class_name"] for obj in detection_list]
             # # object_type, retries = pocd_llm.run_inference(obj_class_list, max_response_length=200)
             # # object_type, retries = pocd_llm.run_inference_single(obj_class_list, max_response_length=100)
-            object_type = [0] * len(obj_class_list)
+            object_type = [1] * len(obj_class_list)
             # retries = "NO LLM"
             # print(colored(f"LLM input: {obj_class_list}", 'green'))
             # print(colored(f"LLM output: {object_type}", 'green'))
             # print(colored(f"LLM retries: {retries}", 'red'))
             
+            found_one_id = False
             if expected_inds:
                 change_list = [cfg.pocd_default_change] * len(expected_inds)
                 std_change_list = [cfg.pocd_default_change_std] * len(expected_inds)
@@ -773,6 +789,8 @@ def main(cfg : DictConfig):
                     if object_idx not in expected_inds:
                         # Object is not expected. No POCD update
                         continue
+                    if one_id is None and objects[object_idx]['class_name'] == 'ball':
+                        one_id = objects[object_idx]['id']
 
                     index = expected_inds.index(object_idx)
                     objects[object_idx]['type'] = POCDObjectTypes(object_type[detection_idx])
@@ -789,20 +807,24 @@ def main(cfg : DictConfig):
                     transform_list[index] = registration_results.transformation
                 
                 for i, index in enumerate(expected_inds):
-                    if change_list[i] == cfg.pocd_default_change:
-                        objects[index]['type'] = POCDObjectTypes.DISSAPEARED
-                        print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'cyan'))
+                    if one_id == objects[index]['id']:
+                        found_one_id = True
+                        one_change = change_list[i]
+                        one_change_std = std_change_list[i]
+                    # if change_list[i] == cfg.pocd_default_change:
+                    #     objects[index]['type'] = POCDObjectTypes.DISSAPEARED
+                    #     print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'cyan'))
 
                 objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
                 # is_valid_detection = objects.getValidDetections(expected_ids) # Valid detection if measurement is an inlier
                 
                 # Remove objects based on POCD
-                pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
-                pruned_object_inds.sort(reverse=True)
-                for i in pruned_object_inds:
-                    print(colored(f"Removing object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'red'))
-                    objects_missing.append(i)
-                    objects.pop(i)
+                # pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
+                # pruned_object_inds.sort(reverse=True)
+                # for i in pruned_object_inds:
+                #     print(colored(f"Removing object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'red'))
+                #     objects_missing.append(i)
+                #     objects.pop(i)
                 
             #     # Translate objects based on POCD
             #     pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold)
@@ -825,12 +847,12 @@ def main(cfg : DictConfig):
 
             ### Fix other variables affected by POCD Update
                 # Reject detections that have large changes
-                for obj_ind in pruned_object_inds:
-                    if obj_ind not in match_indices:
-                        continue
-                    ind = match_indices.index(obj_ind)
-                    match_indices.pop(ind)
-                    detection_list.pop(ind)
+                # for obj_ind in pruned_object_inds:
+                #     if obj_ind not in match_indices:
+                #         continue
+                #     ind = match_indices.index(obj_ind)
+                #     match_indices.pop(ind)
+                #     detection_list.pop(ind)
                     
             #     # Make the detection a new object if the previous objects were removed
             #     num_objects = len(objects)
@@ -921,10 +943,20 @@ def main(cfg : DictConfig):
                 obj_all_frames_out_path,
                 frame_idx,
                 objects,
-                cfg.obj_min_detections,
+                # cfg.obj_min_detections,
+                0,
                 adjusted_pose,
                 color_path
             )
+        
+        if found_one_id:
+            if node.changes.size == 0:
+                node.changes = np.array([one_change, one_change_std]).reshape((1, 2))
+            else:
+                tmp = np.array([one_change, one_change_std]).reshape((1, 2))
+                node.changes = np.vstack([node.changes, tmp])
+            df = pd.DataFrame(node.changes)
+            df.to_csv('changes.csv', index=False, header=['change', 'std_change'])
 
         ### Downsample
         for obj in objects:
