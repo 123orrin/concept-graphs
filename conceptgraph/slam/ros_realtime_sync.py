@@ -497,7 +497,6 @@ def main(cfg : DictConfig):
     query_service_node._attach_model(clip_model)
     query_service_node._attach_tokenizer(clip_tokenizer)
     query_service_node._attach_objects(objects)
-    one_id = None
     while rclpy.ok():
         
         while not node.ready_to_process:
@@ -762,22 +761,9 @@ def main(cfg : DictConfig):
             objects=objects,
             downsample_voxel_size=cfg['downsample_voxel_size']
         )
-        print(colored(f"{spatial_sim}", 'green'))
 
         visual_sim = compute_visual_similarities(detection_list, objects)
 
-        # agg_sim = aggregate_similarities(
-        #     match_method=cfg['match_method'], 
-        #     phys_bias=cfg['phys_bias'], 
-        #     spatial_sim=spatial_sim, 
-        #     visual_sim=visual_sim
-        # )
-
-        # # Perform matching of detections to existing objects
-        # match_indices = match_detections_to_objects(
-        #     agg_sim=agg_sim, 
-        #     detection_threshold=cfg['sim_threshold']  # Use the sim_threshold from the configuration
-        # )
         match_indices = match_detections_to_objects(
             match_method=cfg['match_method'],
             phys_bias=cfg['phys_bias'],
@@ -802,7 +788,6 @@ def main(cfg : DictConfig):
             # print(colored(f"LLM output: {object_type}", 'green'))
             # print(colored(f"LLM retries: {retries}", 'red'))
             
-            found_one_id = False
             if expected_inds:
                 change_list = [cfg.pocd_default_change] * len(expected_inds)
                 std_change_list = [cfg.pocd_default_change_std] * len(expected_inds)
@@ -814,8 +799,6 @@ def main(cfg : DictConfig):
                     if object_idx not in expected_inds:
                         # Object is not expected. No POCD update
                         continue
-                    if one_id is None and objects[object_idx]['class_name'] == 'ball':
-                        one_id = objects[object_idx]['id']
 
                     index = expected_inds.index(object_idx)
                     objects[object_idx]['type'] = POCDObjectTypes(object_type[detection_idx])
@@ -832,10 +815,6 @@ def main(cfg : DictConfig):
                     transform_list[index] = registration_results.transformation
                 
                 for i, index in enumerate(expected_inds):
-                    if one_id == objects[index]['id']:
-                        found_one_id = True
-                        one_change = change_list[i]
-                        one_change_std = std_change_list[i]
                     if change_list[i] == cfg.pocd_default_change:
                         # objects[index]['type'] = POCDObjectTypes.DISSAPEARED
                         print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'cyan'))
@@ -991,15 +970,6 @@ def main(cfg : DictConfig):
         plt.ylabel('POCD Confidence')
         plt.title('POCD Confidence Over Time')
         plt.pause(0.05)
-        
-        if found_one_id:
-            if node.changes.size == 0:
-                node.changes = np.array([one_change, one_change_std]).reshape((1, 2))
-            else:
-                tmp = np.array([one_change, one_change_std]).reshape((1, 2))
-                node.changes = np.vstack([node.changes, tmp])
-            df = pd.DataFrame(node.changes)
-            df.to_csv('changes.csv', index=False, header=['change', 'std_change'])
 
         ### Downsample
         for obj in objects:
