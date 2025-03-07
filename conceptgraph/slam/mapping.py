@@ -80,8 +80,31 @@ def aggregate_similarities(match_method: str, phys_bias: float, spatial_sim: tor
     
     return sims
 
+# def match_detections_to_objects(
+#     agg_sim: torch.Tensor, detection_threshold: float = float('-inf')
+# ) -> List[Optional[int]]:
+#     """
+#     Matches detections to objects based on similarity, returning match indices or None for unmatched.
+
+#     Args:
+#         agg_sim: Similarity matrix (detections vs. objects).
+#         detection_threshold: Threshold for a valid match (default: -inf).
+
+#     Returns:
+#         List of matching object indices (or None if unmatched) for each detection.
+#     """
+#     match_indices = []
+#     for detected_obj_idx in range(agg_sim.shape[0]):
+#         max_sim_value = agg_sim[detected_obj_idx].max()
+#         if max_sim_value <= detection_threshold:
+#             match_indices.append(None)
+#         else:
+#             match_indices.append(agg_sim[detected_obj_idx].argmax().item())
+
+#     return match_indices
+
 def match_detections_to_objects(
-    agg_sim: torch.Tensor, detection_threshold: float = float('-inf')
+    match_method: str, phys_bias: float, spatial_sim: torch.Tensor, visual_sim: torch.Tensor, detection_threshold: float = float('-inf'), spatial_threshold: float = float('-inf'), semantic_threshold: float = float('-inf'), prioritize_semantic_similarity: bool = True
 ) -> List[Optional[int]]:
     """
     Matches detections to objects based on similarity, returning match indices or None for unmatched.
@@ -94,12 +117,29 @@ def match_detections_to_objects(
         List of matching object indices (or None if unmatched) for each detection.
     """
     match_indices = []
-    for detected_obj_idx in range(agg_sim.shape[0]):
-        max_sim_value = agg_sim[detected_obj_idx].max()
-        if max_sim_value <= detection_threshold:
-            match_indices.append(None)
-        else:
-            match_indices.append(agg_sim[detected_obj_idx].argmax().item())
+
+    if match_method == "sim_sum":
+        agg_sim = aggregate_similarities(match_method, phys_bias, spatial_sim, visual_sim)
+        for detected_obj_idx in range(agg_sim.shape[0]):
+            max_sim_value = agg_sim[detected_obj_idx].max()
+            if max_sim_value <= detection_threshold:
+                match_indices.append(None)
+            else:
+                match_indices.append(agg_sim[detected_obj_idx].argmax().item())
+    elif match_method == "sep_thresh":
+        for detected_obj_idx in range(visual_sim.shape[0]):
+            if prioritize_semantic_similarity:
+                max_idx = visual_sim[detected_obj_idx].argmax().item()
+            else:
+                max_idx = spatial_sim[detected_obj_idx].argmax().item()
+            spatial_max_sim_value = spatial_sim[detected_obj_idx][max_idx].item()
+            visual_max_sim_value = visual_sim[detected_obj_idx][max_idx].item()
+            if visual_max_sim_value <= semantic_threshold or spatial_max_sim_value <= spatial_threshold:
+                match_indices.append(None)
+            else:
+                match_indices.append(max_idx)
+    else:
+        raise ValueError(f"Unknown matching method: {match_method}")
 
     return match_indices
 

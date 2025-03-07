@@ -11,6 +11,8 @@ color_path: ${dataset_root}/${scene_id}/color
 
 device: cuda
 
+map_with_button: True
+
 rotate: True
 use_pc_for_depth: False
 
@@ -24,10 +26,11 @@ llm_model_id: "google/gemma-2b-it" # ["google/gemma-2b-it", "meta-llama/Meta-Lla
 
 use_pocd: True
 pocd_default_change: 20 # Metres
-pocd_default_change_std: 0.05 # Metres
-pocd_removal_threshold: 0.0 # Percentage
+pocd_default_change_std: 0.5 # Metres
+pocd_visibility_threshold: 0.5 # Percentage
+pocd_removal_threshold: 0.5 # Percentage
 pocd_transformation_threshold: 0.75 # Percentage
-pocd_response: 25
+pocd_response: 15
 
 # Intel low resolution
 # desired_height: 240

@@ -174,7 +174,7 @@ class ProbabilisticMapObjectList(MapObjectList):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def expectedToObserve(self, camera_pose, intrinsics, img_height, img_width, min_depth, max_depth, visibility_threshold=0.35, projection_plane=1):
+    def expectedToObserve(self, camera_pose, intrinsics, img_height, img_width, min_depth, max_depth, visibility_threshold=0.35):
         '''
         Compute the expected objects to observe given the pose and field of view.
 
@@ -254,7 +254,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             change = change_list[idx]
             std_change = std_change_list[idx]
 
-            s_weight = 1
+            s_weight = 1 # Higher weight means greater increase, lower decrease
             if object_type == POCDObjectTypes.DYNAMIC and not inlier:
                 s_weight = 3 # Drop fast
             elif object_type == POCDObjectTypes.DYNAMIC and inlier:
@@ -377,7 +377,7 @@ class ProbabilisticMapObjectList(MapObjectList):
         """
         is_valid = []
         for obj in self:
-            if ids is not None and obj['id'] not in ids:
+            if (ids is not None) and (obj['id'] not in ids):
                 continue
             if obj['inlier']:
                 is_valid.append(True)
@@ -389,7 +389,6 @@ class POCDObjectTypes(Enum):
     DYNAMIC = 0
     STATIC = 1
     DISSAPEARED = 2
-
 
 # not sure if I will use this 
 class MapEdge():

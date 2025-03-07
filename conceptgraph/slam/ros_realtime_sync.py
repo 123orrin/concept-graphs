@@ -12,6 +12,7 @@ import gzip
 import pdb
 from termcolor import colored
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # Third-party imports
 import cv2
@@ -104,7 +105,7 @@ from transformers import pipeline
 import rclpy
 from rclpy.node import Node
 import rclpy.time
-from sensor_msgs.msg import Image as ROSImage, CameraInfo, PointCloud2
+from sensor_msgs.msg import Image as ROSImage, CameraInfo, PointCloud2, Joy
 from geometry_msgs.msg import PoseStamped, Point
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -130,6 +131,8 @@ class Subscriber(Node):
         # self.sub_info = MF_Subscriber(self, CameraInfo, 'spectacular_ai/camera_info')
         # self.sub_color = MF_Subscriber(self, ROSImage, 'spectacular_ai/color_image')
 
+        self.sub_joy = self.create_subscription(Joy, 'gamepad_joy', self._joy_callback, 1)
+
         if cfg.use_pc_for_depth:
             self.sub_depth = MF_Subscriber(self, PointCloud2, 'camera/depth/points')
             # self.sub_depth = MF_Subscriber(self, PointCloud2, 'spectacular_ai/point_cloud/local')
@@ -149,6 +152,9 @@ class Subscriber(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.ready_to_process = False
+        self.map_with_button = cfg.map_with_button
+        self.should_map = False
+
         self.info = None
         self.color = None
         self.depth = None
@@ -159,7 +165,8 @@ class Subscriber(Node):
         self.ready_to_process = False
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
         self.pose = self._get_pose(time=color_msg.header.stamp)
-        if self.pose is not None:
+        should_map = (not self.map_with_button) or self.should_map# PS4 home button
+        if self.pose is not None and should_map:
             self.ready_to_process = True
 
     def callback_sync_sai(self, info_msg, color_msg, depth_msg, pose_msg):
@@ -167,6 +174,9 @@ class Subscriber(Node):
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
         self.pose = self._process_pose_sai(pose_msg)
         self.ready_to_process = True
+
+    def _joy_callback(self, msg):
+        self.should_map = msg.axes[-1] == 1
 
     def _process_inputs(self, info_msg, color_msg, depth_msg):
         # Process all inputs
@@ -693,6 +703,7 @@ def main(cfg : DictConfig):
                 #     dbscan_min_points=cfg["dbscan_min_points"],
                 #     run_dbscan=False,
                 # )
+                obj["pcd"] = obj["pcd"].voxel_down_sample(cfg["downsample_voxel_size"]/2)
                 obj["bbox"] = get_bounding_box(
                     spatial_sim_type=cfg['spatial_sim_type'], 
                     pcd=obj["pcd"],
@@ -704,9 +715,12 @@ def main(cfg : DictConfig):
 
         intrinsics_np = intrinsics.cpu().numpy()
         # Note: Here we are passing in height as width (and vice-versa) since the images got flipped
-        expected_inds, expected_ids = objects.expectedToObserve(adjusted_pose, intrinsics_np, cfg['camera_params']['image_width'], cfg['camera_params']['image_height'], cfg.min_depth, cfg.max_depth)
+        expected_inds, expected_ids = objects.expectedToObserve(adjusted_pose, intrinsics_np, cfg['camera_params']['image_width'], cfg['camera_params']['image_height'], cfg.min_depth, cfg.max_depth, cfg['pocd_visibility_threshold'])
         for i in expected_inds:
             print(colored(f"Expected to see {objects[i]['class_name']}", 'green'))
+
+        for obj in objects:
+            obj['confidence_history'] += [obj['pocd_confidence']]
 
         if len(detection_list) == 0: # no detections, skip
             if len(expected_inds) > 0:
@@ -748,20 +762,31 @@ def main(cfg : DictConfig):
             objects=objects,
             downsample_voxel_size=cfg['downsample_voxel_size']
         )
+        print(colored(f"{spatial_sim}", 'green'))
 
         visual_sim = compute_visual_similarities(detection_list, objects)
 
-        agg_sim = aggregate_similarities(
-            match_method=cfg['match_method'], 
-            phys_bias=cfg['phys_bias'], 
-            spatial_sim=spatial_sim, 
-            visual_sim=visual_sim
-        )
+        # agg_sim = aggregate_similarities(
+        #     match_method=cfg['match_method'], 
+        #     phys_bias=cfg['phys_bias'], 
+        #     spatial_sim=spatial_sim, 
+        #     visual_sim=visual_sim
+        # )
 
-        # Perform matching of detections to existing objects
+        # # Perform matching of detections to existing objects
+        # match_indices = match_detections_to_objects(
+        #     agg_sim=agg_sim, 
+        #     detection_threshold=cfg['sim_threshold']  # Use the sim_threshold from the configuration
+        # )
         match_indices = match_detections_to_objects(
-            agg_sim=agg_sim, 
-            detection_threshold=cfg['sim_threshold']  # Use the sim_threshold from the configuration
+            match_method=cfg['match_method'],
+            phys_bias=cfg['phys_bias'],
+            spatial_sim=spatial_sim,
+            visual_sim=visual_sim,
+            detection_threshold=cfg['sim_threshold'],
+            spatial_threshold=cfg['physical_threshold'],
+            semantic_threshold=cfg['semantic_threshold'],
+            prioritize_semantic_similarity=cfg['prioritize_semantic_sim'],
         )
 
         ##### Perform POCD update
@@ -771,7 +796,7 @@ def main(cfg : DictConfig):
             obj_class_list = [obj["class_name"] for obj in detection_list]
             # # object_type, retries = pocd_llm.run_inference(obj_class_list, max_response_length=200)
             # # object_type, retries = pocd_llm.run_inference_single(obj_class_list, max_response_length=100)
-            object_type = [1] * len(obj_class_list)
+            object_type = [POCDObjectTypes.STATIC.value] * len(obj_class_list)
             # retries = "NO LLM"
             # print(colored(f"LLM input: {obj_class_list}", 'green'))
             # print(colored(f"LLM output: {object_type}", 'green'))
@@ -811,20 +836,20 @@ def main(cfg : DictConfig):
                         found_one_id = True
                         one_change = change_list[i]
                         one_change_std = std_change_list[i]
-                    # if change_list[i] == cfg.pocd_default_change:
-                    #     objects[index]['type'] = POCDObjectTypes.DISSAPEARED
-                    #     print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'cyan'))
+                    if change_list[i] == cfg.pocd_default_change:
+                        # objects[index]['type'] = POCDObjectTypes.DISSAPEARED
+                        print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'cyan'))
 
                 objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
                 # is_valid_detection = objects.getValidDetections(expected_ids) # Valid detection if measurement is an inlier
                 
                 # Remove objects based on POCD
-                # pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
-                # pruned_object_inds.sort(reverse=True)
-                # for i in pruned_object_inds:
-                #     print(colored(f"Removing object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'red'))
-                #     objects_missing.append(i)
-                #     objects.pop(i)
+                pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
+                pruned_object_inds.sort(reverse=True)
+                for i in pruned_object_inds:
+                    print(colored(f"Removing object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'red'))
+                    objects_missing.append(i)
+                    objects.pop(i)
                 
             #     # Translate objects based on POCD
             #     pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold)
@@ -846,7 +871,7 @@ def main(cfg : DictConfig):
             #     # TODO: Add back in objects based on POCD
 
             ### Fix other variables affected by POCD Update
-                # Reject detections that have large changes
+                # # Reject detections that have large changes
                 # for obj_ind in pruned_object_inds:
                 #     if obj_ind not in match_indices:
                 #         continue
@@ -854,11 +879,11 @@ def main(cfg : DictConfig):
                 #     match_indices.pop(ind)
                 #     detection_list.pop(ind)
                     
-            #     # Make the detection a new object if the previous objects were removed
-            #     num_objects = len(objects)
-            #     for i, ind in enumerate(match_indices):
-            #         if ind is not None and ind >= num_objects:
-            #             match_indices[i] = None
+                # Make the detection a new object if the previous objects were removed
+                num_objects = len(objects)
+                for i, ind in enumerate(match_indices):
+                    if ind is not None and ind >= num_objects:
+                        match_indices[i] = None
         ##### End POCD Update
 
 
@@ -949,6 +974,24 @@ def main(cfg : DictConfig):
                 color_path
             )
         
+        plt.clf()
+        data = []
+        for obj in objects:
+            first_idx = obj['image_idx'][0]
+            history = [None] * first_idx + obj['confidence_history']
+            data.append([history, obj['class_name'], obj['curr_obj_num'], first_idx])
+        legend = []
+        for d in data:
+            plt.plot(d[0])
+            legend.append(d[1])
+        plt.legend(legend)
+        plt.ylim([0, 1])
+        plt.xlim(left=0)
+        plt.xlabel('Frame Index')
+        plt.ylabel('POCD Confidence')
+        plt.title('POCD Confidence Over Time')
+        plt.pause(0.05)
+        
         if found_one_id:
             if node.changes.size == 0:
                 node.changes = np.array([one_change, one_change_std]).reshape((1, 2))
@@ -960,7 +1003,7 @@ def main(cfg : DictConfig):
 
         ### Downsample
         for obj in objects:
-            reduced_pcd = obj["pcd"].voxel_down_sample(cfg["downsample_voxel_size"])
+            reduced_pcd = obj["pcd"].voxel_down_sample(cfg["downsample_voxel_size"]/2)
             obj['pcd'] = reduced_pcd
             obj["n_points"] = len(reduced_pcd.points)
 

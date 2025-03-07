@@ -30,15 +30,16 @@ exit_early_file: ${repo_root}/conceptgraph/hydra_configs/early_exit.json
 device: cuda
 
 use_iou: !!bool True
-spatial_sim_type: iou # "iou", "giou", "overlap"
+spatial_sim_type: giou # "iou", "giou", "overlap"
 phys_bias: 0.0
-match_method: "sim_sum" # "sep_thresh", "sim_sum"
+match_method: sim_sum # "sep_thresh", "sim_sum"
 # Only when match_method=="sep_thresh"
-semantic_threshold: 0.5
+prioritize_semantic_sim: !!bool False
+semantic_threshold: 0.8
 physical_threshold: 0.5
 # Only when match_method=="sim_sum"
 #sim_threshold: 1.2
-sim_threshold: 1.0
+sim_threshold: 0.9
 
 # For contain_number
 use_contain_number: !!bool False
