@@ -295,9 +295,11 @@ def merge_obj2_into_obj1(obj1, obj2, downsample_voxel_size, dbscan_remove_noise,
     extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number']
     add_attributes = ['num_detections', 'num_obj_in_class']
     skip_attributes = ['id', 'class_name', 'is_background', 'new_counter', 'curr_obj_num', 'inst_color']  # 'inst_color' just keeps obj1's
-    pocd_attributes = ['confidence_history', 'first_observed_time', 'last_observed_time', 'pocd_confidence', 'age', 'lost_time', 'a', 'b', 'mu', 'sig', 'eps', 'inlier', 'type']
+    pocd_skip_attributes = ['confidence_history', 'first_observed_time', 'last_observed_time', 'pocd_confidence', 'age', 'lost_time', 'a', 'b', 'mu', 'sig', 'eps', 'inlier', 'type']
+    pocd_custom_attributes = ['last_observed_time', 'time_of_disappearance']
     custom_handled = ['pcd', 'bbox', 'clip_ft', 'text_ft', 'n_points']
-    skip_attributes += pocd_attributes
+    skip_attributes += pocd_skip_attributes
+    custom_handled += pocd_custom_attributes
 
     # Check for unhandled keys and throw an error if there are
     all_handled_keys = set(extend_attributes + add_attributes + skip_attributes + custom_handled)
@@ -345,6 +347,10 @@ def merge_obj2_into_obj1(obj1, obj2, downsample_voxel_size, dbscan_remove_noise,
     #                    obj2['text_ft'] * n_obj2_det) / (
     #                    n_obj1_det + n_obj2_det)
     # obj1['text_ft'] = F.normalize(obj1['text_ft'], dim=0)
+    
+    obj1['last_observed_time'] = max([obj1['last_observed_time'], obj2['last_observed_time'], obj2['first_observed_time']])
+
+    obj1['time_of_disappearance'] = -1
 
     return obj1
 
@@ -568,8 +574,8 @@ def compute_overlap_matrix_general(objects_a: ProbabilisticMapObjectList, object
             # get the distance of the nearest neighbor of
             # each point in points_b[idx_b] to the points_a[idx_a]
             D, I = indices_a[idx_a].search(points_b[idx_b], 1) 
-            # overlap = (D < downsample_voxel_size ** 2).sum() # D is the squared distance
-            overlap = D.sum()
+            overlap = (D < downsample_voxel_size ** 2).sum() # D is the squared distance
+            # overlap = D.sum()
 
             # Calculate the ratio of points within the threshold
             overlap_matrix[idx_a, idx_b] = overlap / len(points_b[idx_b])
@@ -1066,16 +1072,17 @@ def make_detection_list_from_pcd_and_gobs(
         detected_object = {
             'first_observed_time': time_stamp,
             'last_observed_time': -1,
-            'pocd_confidence': 2 / 3, # Initialize as a / (a + b)
+            'time_of_disappearance': -1,
             'age': -1,
             'lost_time': -1,
+            'pocd_confidence': 2 / 3, # Initialize as a / (a + b)
             'a': 2,
             'b': 1,
             'mu': 0,
             'sig': 0.5,
             'eps': 1e-5,
             'inlier': True,
-            'type': POCDObjectTypes.DYNAMIC,
+            'type': POCDObjectTypes.STATIC,
             'confidence_history': [],
 
             'id' : uuid.uuid4(),

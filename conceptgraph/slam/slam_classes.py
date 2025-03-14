@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import numpy as np
 import open3d as o3d
 from scipy.special import gammaln
-from scipy.stats import norm, uniform
+from scipy.stats import norm, uniform 
 
 def to_numpy(tensor):
     if isinstance(tensor, np.ndarray):
@@ -384,6 +384,231 @@ class ProbabilisticMapObjectList(MapObjectList):
             else:
                 is_valid.append(False)
         return is_valid
+
+    def getChangesForExpectedObjects(self, detection_list, expected_object_indices, match_indices, default_change, default_change_std):
+        """
+        Get the changes of expected objects. If an object is expected but not observed, the default change is used.
+        If an object is observed, the change is computed based on the observation usin gICP.
+
+        Arguments:
+            detection_list: list of detections
+            expected_object_indices: list of indices of expected objects
+            match_indices: list of object indices to which the corresponding detection is matched to
+            default_change: default change value
+            default_change_std: default change standard deviation
+        Returns:
+            changes: list of changes
+            std_changes: list of standard deviations of changes
+            transformations: list of transformations
+        """
+        change_list = [default_change] * len(expected_object_indices)
+        std_change_list = [default_change_std] * len(expected_object_indices)
+        transform_list = [np.eye(4)] * len(expected_object_indices)
+        for detection_idx, object_idx in enumerate(match_indices):
+            if object_idx is None:
+                # Object is new. No POCD update
+                continue
+            if object_idx not in expected_object_indices:
+                # Object is not expected. No POCD update
+                continue
+
+            index = expected_object_indices.index(object_idx)
+            # Object has been observed. Evaluate change magnitude with ICP
+            detection_pcd = detection_list[detection_idx]['pcd']
+            object_pcd = self[object_idx]['pcd']
+            registration_results = self.getICPRegistration(detection_pcd, object_pcd)
+            std_change_list[index] = default_change_std
+            change_list[index] = np.linalg.norm(registration_results.transformation[:3, 3])
+            # std_change_list[index] = registration_results.inlier_rmse
+            transform_list[index] = registration_results.transformation
+            
+        return change_list, std_change_list, transform_list
+
+    def transformObjectsToDetection(self, expected_object_indices, transform_list, inds=None):
+        """
+        Transform objects based on the given transformations
+
+        Args:
+            transform_list: list of transformations
+            inds: list of indices of objects to transform
+        """
+        assert inds is not None, 'Indices must be provided'
+        for i in inds:
+            if i not in expected_object_indices:
+                continue
+            tmp_idx = expected_object_indices.index(i)
+            transform = transform_list[tmp_idx]
+            self[i]['pcd'].transform(transform)
+            
+            oriented_bbox = self[i]['bbox'].get_oriented_bounding_box()
+            oriented_bbox.translate(transform[:3, 3])
+            oriented_bbox.rotate(transform[:3, :3])
+            axis_bbox = oriented_bbox.get_axis_aligned_bounding_box()
+            self[i]['bbox'] = axis_bbox
+
+    def transformObjectsToRecentObjects(self, transform_list: list=[], inds: list=[]):
+        """
+        Transform objects based on the given transformations
+
+        Args:
+            transform_list: list of transformations
+            inds: list of indices of objects to transform
+        """
+        assert inds is not None, 'Indices must be provided'
+        assert len(inds) == len(transform_list), 'Transform list must be the same length as the indices list'
+        for i, ind in enumerate(inds):
+            if ind is None:
+                continue
+            transform = transform_list[i]
+            pcd = self[ind]['pcd']
+            pcd.transform(transform)
+            self[ind]['pcd'] = pcd
+
+            oriented_bbox = self[ind]['bbox'].get_oriented_bounding_box()
+            oriented_bbox.translate(transform[:3, 3])
+            oriented_bbox.rotate(transform[:3, :3])
+            axis_bbox = oriented_bbox.get_axis_aligned_bounding_box()
+            self[ind]['bbox'] = axis_bbox
+
+    def mergeObjectsWithRecentObjects(self, dissapeared_inds: list=[], matched_inds: list=[]):
+        """
+        Merge important properties of the dissapeared objects and the matched objects
+
+        Args:
+            dissapeared_inds: list of indices of dissapeared objects
+            matched_inds: list of indices of matched objects
+        """
+        assert len(dissapeared_inds) == len(matched_inds), 'Dissapeared and matched indices must be the same length'
+
+        extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number']
+        add_attributes = ['num_detections', 'num_obj_in_class']
+        skip_attributes = ['id', 'class_name', 'is_background', 'new_counter', 'curr_obj_num', 'inst_color']  # 'inst_color' just keeps obj1's
+        custom_handled = ['pcd', 'bbox', 'clip_ft', 'text_ft', 'n_points']
+
+        pocd_skip_attributes = ['confidence_history', 'first_observed_time', 'pocd_confidence', 'age', 'lost_time', 'eps', 'inlier', 'type']
+        pocd_mean_attributes = ['a', 'b', 'mu', 'sig']
+        pocd_custom_attributes = ['last_observed_time', 'time_of_disappearance', 'pocd_confidence']
+
+        skip_attributes += pocd_skip_attributes
+        custom_handled += pocd_custom_attributes
+
+        # Check for unhandled keys and throw an error if there are
+        all_handled_keys = set(extend_attributes + add_attributes + skip_attributes + custom_handled + pocd_mean_attributes)
+        unhandled_keys = set(self[0].keys()) - all_handled_keys
+        if unhandled_keys:
+            raise ValueError(f"Unhandled keys detected in obj2: {unhandled_keys}. Please update the merge function to handle these attributes.")
+        
+        for d_ind, m_ind in zip(dissapeared_inds, matched_inds):
+            if m_ind is None:
+                continue
+            # Process extend and add attributes
+            for attr in extend_attributes:
+                if attr in self[d_ind] and attr in self[m_ind]:
+                    self[d_ind][attr].extend(self[m_ind][attr])
+            
+            for attr in add_attributes:
+                if attr in self[d_ind] and attr in self[m_ind]:
+                    self[d_ind][attr] += self[m_ind][attr]
+
+            # Process custom
+            self[d_ind]['pcd'] = self[m_ind]['pcd']
+            self[d_ind]['clip_ft'] = self[m_ind]['clip_ft']
+            self[d_ind]['bbox'] = self[m_ind]['bbox']
+            self[d_ind]['n_points'] = self[m_ind]['n_points']
+            
+            self[d_ind]['last_observed_time'] = self[m_ind]['last_observed_time']
+            self[d_ind]['time_of_disappearance'] = -1
+
+            # Process mean attributes
+            for attr in pocd_mean_attributes:
+                if attr in self[d_ind] and attr in self[m_ind]:
+                    self[d_ind][attr] =(self[d_ind][attr] + self[m_ind][attr]) / 2
+
+        return True
+
+    def removeObjectsByIndex(self, inds: list=[]):
+        inds = sorted(inds, reverse=True)
+        for i in inds:
+            self.pop(i)
+        return True
+
+    def matchDissapearedObjectsToRecentObjects(self, look_back_time: int=10, look_forward_time: int=10, inds: list=[]):
+        """
+        Matches dissapeared objects to the objects that were instatiated near its dissapearence. This is able to match objects that "dissapeared" but were actually just moved nearby AND are still visible in the same frame. 
+
+        Arguments:
+            inds: list of indices of objects to match
+        Returns:
+            matches: list of indices which match the disappeared objects
+            transforms: list of transformations from the dissapeared object to the matched object
+        """
+
+        matches = []
+        transforms = []
+        for missing_object_ind in inds:
+            print(f"Matching dissapeared object {self[missing_object_ind]['class_name']} to recent objects")
+            potential_match_inds = []
+            for i, obj in enumerate(self):
+                if i == missing_object_ind:
+                    continue
+                # Check if an object was instatiated near the time the object dissapeared
+                dissapeared_time = self[missing_object_ind]['time_of_disappearance']
+                instatiated_time = obj['first_observed_time']
+                if instatiated_time < dissapeared_time - look_back_time:
+                    # The object was instatiated too long ago
+                    continue
+                if instatiated_time > dissapeared_time + look_forward_time:
+                    # The object was instatiated too long after the object dissapeared
+                    continue
+                potential_match_inds.append(i)
+            
+            if len(potential_match_inds) == 0:
+                # No potential matches
+                print(f"No potential matches for dissapeared object {self[missing_object_ind]['class_name']}")
+                matches.append(None)
+                transforms.append(np.eye(4))
+                continue
+
+            # Compute visual similarity between potential matches
+            potential_objects = []
+            for i in potential_match_inds:
+                potential_objects.append(self[i]['clip_ft'])
+            potential_objects = torch.stack(potential_objects)
+            query_object = self[missing_object_ind]['clip_ft']
+            visual_sim = F.cosine_similarity(potential_objects, query_object)
+
+            # Return object index with highest similarity
+            max_ind = visual_sim.argmax().item()
+            match_ind = potential_match_inds[max_ind]
+            matches.append(match_ind)
+
+            # Compute transformation between the two objects
+            registration_results = self.getICPRegistration(self[missing_object_ind]['pcd'], self[match_ind]['pcd'], threshold=0.01, max_iteration=100)
+            transforms.append(registration_results.transformation)
+
+            print(f"Matched dissapeared object {self[missing_object_ind]['class_name']} to object {self[match_ind]['class_name']} with visual similarity {visual_sim[max_ind]}")
+            print(f"Transformation: {registration_results.transformation}")
+    
+        return matches, transforms
+    
+    def getICPRegistration(self, source_pcd, target_pcd, transform_init=np.eye(4), threshold=0.01, max_iteration=30):
+        """
+        Get the ICP registration between two point clouds
+
+        Arguments:
+            source_pcd: source point cloud
+            target_pcd: target point cloud
+            threshold: threshold for convergence
+        Returns:
+            registration_results: registration results
+        """
+        registration_results = o3d.pipelines.registration.registration_icp(
+            source_pcd, target_pcd, threshold, transform_init, o3d.pipelines.registration.TransformationEstimationPointToPoint(), o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iteration))
+        return registration_results
+
+                
+
+
 
 class POCDObjectTypes(Enum):
     DYNAMIC = 0
