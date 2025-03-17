@@ -606,8 +606,23 @@ class ProbabilisticMapObjectList(MapObjectList):
             source_pcd, target_pcd, threshold, transform_init, o3d.pipelines.registration.TransformationEstimationPointToPoint(), o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iteration))
         return registration_results
 
-                
+    def matchRemovedObjectsToRecentObjects(self, removed_object_list, look_back_time: int=10, look_forward_time: int=10):
+        """
+        Take in a list of removed objects and match them to recently added objects.
+        """
+        all_objs = self + removed_object_list
+        inds = range(len(self), len(all_objs))
+        matches, transforms = all_objs.matchDissapearedObjectsToRecentObjects(look_back_time, look_forward_time, inds)
+        return matches, transforms
 
+    def reinstateRemovedObjects(self, removed_object_list, matches):
+        """
+        Reinstate the removed objects based on the matches and transformations
+        """
+        all_objs = self + removed_object_list
+        inds = range(len(self), len(all_objs))
+        all_objs.mergeObjectsWithRecentObjects(inds, matches)
+        return True
 
 
 class POCDObjectTypes(Enum):

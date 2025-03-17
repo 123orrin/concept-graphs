@@ -731,7 +731,7 @@ def main(cfg : DictConfig):
                 change_list = [cfg.pocd_default_change] * len(expected_inds)
                 change_std_list = [cfg.pocd_default_change_std] * len(expected_inds)
                 objects.updateProbability(change_list=change_list, std_change_list=change_std_list, ids=expected_ids, cap=cfg.pocd_response)
-                pruned_object_inds = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
+                pruned_object_inds, _ = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
                 objects.removeObjectsByIndex(pruned_object_inds)
             continue
 
@@ -890,7 +890,7 @@ def main(cfg : DictConfig):
             objects.mergeObjectsWithRecentObjects(pruned_object_inds, dissapeared_match_indices)
             to_remove = []
             for ind in dissapeared_match_indices:
-                if dissapeared_match_indices is None:
+                if ind is None:
                     continue
                 objects.pop(ind)
                 for i, match_ind in enumerate(match_indices):
@@ -898,7 +898,7 @@ def main(cfg : DictConfig):
                         continue
                     if match_ind == ind:
                         to_remove.append(i)
-                    if match_ind  > ind:
+                    if match_ind > ind:
                         match_indices[i] -= 1
             to_remove.sort(reverse=True)
             for i in to_remove:
