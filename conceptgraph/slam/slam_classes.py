@@ -486,8 +486,8 @@ class ProbabilisticMapObjectList(MapObjectList):
         custom_handled = ['pcd', 'bbox', 'clip_ft', 'text_ft', 'n_points']
 
         pocd_skip_attributes = ['confidence_history', 'first_observed_time', 'pocd_confidence', 'age', 'lost_time', 'eps', 'inlier', 'type']
-        pocd_mean_attributes = ['a', 'b', 'mu', 'sig']
-        pocd_custom_attributes = ['last_observed_time', 'time_of_disappearance', 'pocd_confidence']
+        pocd_mean_attributes = ['a', 'b', 'mu', 'sig', 'pocd_confidence']
+        pocd_custom_attributes = ['last_observed_time', 'time_of_disappearance']
 
         skip_attributes += pocd_skip_attributes
         custom_handled += pocd_custom_attributes
@@ -522,7 +522,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             # Process mean attributes
             for attr in pocd_mean_attributes:
                 if attr in self[d_ind] and attr in self[m_ind]:
-                    self[d_ind][attr] =(self[d_ind][attr] + self[m_ind][attr]) / 2
+                    self[d_ind][attr] = (self[d_ind][attr] + self[m_ind][attr]) / 2
 
         return True
 
@@ -580,10 +580,15 @@ class ProbabilisticMapObjectList(MapObjectList):
             # Return object index with highest similarity
             max_ind = visual_sim.argmax().item()
             match_ind = potential_match_inds[max_ind]
-            matches.append(match_ind)
 
             # Compute transformation between the two objects
             registration_results = self.getICPRegistration(self[missing_object_ind]['pcd'], self[match_ind]['pcd'], threshold=0.01, max_iteration=100)
+            if np.all(registration_results.transformation == np.eye(4)):
+                matches.append(None)
+                transforms.append(np.eye(4))
+                continue
+
+            matches.append(match_ind)
             transforms.append(registration_results.transformation)
 
             print(f"Matched dissapeared object {self[missing_object_ind]['class_name']} to object {self[match_ind]['class_name']} with visual similarity {visual_sim[max_ind]}")
@@ -610,6 +615,8 @@ class ProbabilisticMapObjectList(MapObjectList):
         """
         Take in a list of removed objects and match them to recently added objects.
         """
+        for obj in removed_object_list:
+            obj['time_of_disappearance'] = obj['last_observed_time']
         all_objs = self + removed_object_list
         inds = range(len(self), len(all_objs))
         matches, transforms = all_objs.matchDissapearedObjectsToRecentObjects(look_back_time, look_forward_time, inds)
@@ -622,7 +629,9 @@ class ProbabilisticMapObjectList(MapObjectList):
         all_objs = self + removed_object_list
         inds = range(len(self), len(all_objs))
         all_objs.mergeObjectsWithRecentObjects(inds, matches)
+        self = all_objs[:len(self)]
         return True
+
 
 
 class POCDObjectTypes(Enum):

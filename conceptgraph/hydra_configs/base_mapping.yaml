@@ -36,7 +36,7 @@ match_method: sep_thresh # "sep_thresh", "sim_sum"
 # Only when match_method=="sep_thresh"
 prioritize_semantic_sim: !!bool False
 semantic_threshold: 0.8
-physical_threshold: 0.5
+physical_threshold: 0.7
 # Only when match_method=="sim_sum"
 #sim_threshold: 1.2
 sim_threshold: 0.9

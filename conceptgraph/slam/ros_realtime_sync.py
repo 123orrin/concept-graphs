@@ -142,8 +142,8 @@ class Subscriber(Node):
             # self.sub_depth = MF_Subscriber(self, ROSImage, 'spectacular_ai/depth_image')
         
 
-        MAX_MESSAGE_DELAY = 1/15
-        self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth], 1, MAX_MESSAGE_DELAY)
+        self.MAX_MESSAGE_DELAY = 1/30
+        self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth], 1, self.MAX_MESSAGE_DELAY)
         self.callback_synchronizer.registerCallback(self.callback_sync)
         # self.sub_pose = MF_Subscriber(self, PoseStamped, 'spectacular_ai/pose_image_synced')
         # self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth, self.sub_pose], 1, MAX_MESSAGE_DELAY)
@@ -167,7 +167,7 @@ class Subscriber(Node):
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
         self.pose = self._get_pose(time=color_msg.header.stamp)
         should_map = (not self.map_with_button) or self.should_map# PS4 home button
-        if self.pose is not None and should_map:
+        if (self.pose is not None) and should_map:
             self.ready_to_process = True
 
     def callback_sync_sai(self, info_msg, color_msg, depth_msg, pose_msg):
@@ -337,9 +337,21 @@ class Subscriber(Node):
         intrinsics = intrinsics.to(self.cfg.device).type(torch.float)
         return intrinsics
     
-    def _get_pose(self, time=rclpy.time.Time()):
+    def _get_pose(self, time=None):
+        if time is None:
+            time = self.get_clock().now()
+        if type(time) != rclpy.time.Time:
+            time = rclpy.time.Time.from_msg(time)
+
         try:
             transform_msg = self.tf_buffer.lookup_transform("map", "camera_color_optical_frame", time)
+            # Check that transform is recent
+            transform_time = rclpy.time.Time.from_msg(transform_msg.header.stamp)
+            diff = abs(time.nanoseconds - transform_time.nanoseconds) / 1e9
+            if diff > self.MAX_MESSAGE_DELAY:
+                print(colored(f"Transform is too old! Difference is {diff}. Maximum allowed delay is {self.MAX_MESSAGE_DELAY}.", 'red'))
+                return None
+            # Process Pose
             return self._process_pose(transform_msg)
         except Exception as e:
             print(f"Failed to get pose: {e}")
@@ -810,64 +822,60 @@ def main(cfg : DictConfig):
                 objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
                 
                 # Remove objects based on POCD
+                to_remove = set()
                 pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
-                pruned_object_inds.sort(reverse=True)
-                # objects.removeObjectsByIndex(pruned_object_inds)
+                to_remove.update(pruned_object_inds)
                 for ind in pruned_object_inds:
-                    print(colored(f"Removing object {objects[ind]['class_name']} with probability {objects[ind]['pocd_confidence']}", 'red'))
-                    objects_missing.append(objects[ind])
-                    objects.pop(ind)
-                    location_in_list = None
-                    for i, match_ind in enumerate(match_indices):
-                        if match_ind is None:
-                            continue
-                        if match_ind == ind:
-                            location_in_list = i
-                        if match_ind > ind:
-                            match_indices[i] -= 1
-                    if location_in_list is not None:
-                        match_indices.pop(location_in_list)
-                        detection_list.pop(location_in_list)                    
+                    print(colored(f"Removing object {objects[ind]['class_name']} with probability {objects[ind]['pocd_confidence']}", 'red'))                 
 
                 # Translate objects based on POCD
-                pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold)
+                pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold, cfg.pocd_removal_threshold)
                 for i in pruned_object_inds:
                     print(colored(f"Transforming object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'yellow'))
+                
                 # Transform to a detection, if detected
                 # objects.transformObjectsToDetection(expected_object_indices=expected_inds, transform_list=obj_transformations, inds=pruned_object_inds)
                 # Transform to similar objects in library
                 pruned_object_inds = [i for i in pruned_object_inds if i not in match_indices]
                 dissapeared_match_indices, transform_list = objects.matchDissapearedObjectsToRecentObjects(cfg.look_back_time, cfg.look_forward_time, pruned_object_inds)
                 # objects.transformObjectsToRecentObjects(transform_list, dissapeared_match_indices)
-                # objects.mergeObjectsWithRecentObjects(pruned_object_inds, dissapeared_match_indices)
-                # to_remove = []
-                # for ind in dissapeared_match_indices:
-                #     objects.pop(ind)
-                #     for i, match_ind in enumerate(match_indices):
-                #         if match_ind is None:
-                #             continue
-                #         elif match_ind == ind:
-                #             to_remove.append(ind)
-                #         elif match_ind  > ind:
-                #             match_indices[i] -= 1
+                objects.mergeObjectsWithRecentObjects(pruned_object_inds, dissapeared_match_indices)
+                to_remove.update(dissapeared_match_indices)
+
+                # Remove objects
+                to_remove = [i for i in list(to_remove) if i is not None]
+                to_remove.sort(reverse=True)
+                for ind in to_remove:
+                    objects.pop(ind)
+                    locations_in_list = []
+                    for i, match_ind in enumerate(match_indices):
+                        if match_ind is None:
+                            continue
+                        if match_ind == ind:
+                            locations_in_list.append(i)
+                        if match_ind > ind:
+                            match_indices[i] -= 1
+                    locations_in_list = locations_in_list[::-1]
+                    for i in locations_in_list:
+                        match_indices.pop(i)
+                        detection_list.pop(i)
 
                 # Reject detections that are outliers
-                # pruned_detection_inds = []
-                # for i, ind in enumerate(match_indices):
-                #     print(ind)
-                #     if ind is None:
-                #         continue
-                #     if objects[ind]['inlier']:
-                #         continue
-                #     print(colored(f"Rejecting detection {detection_list[i]['class_name']} as an outlier", 'magenta'))
-                #     pruned_detection_inds.append(i)
-                # pruned_detection_inds.sort(reverse=True)
-                # for i in pruned_detection_inds:
-                #     detection_list.pop(i)
-                #     match_indices.pop(i)
+                pruned_detection_inds = []
+                for i, ind in enumerate(match_indices):
+                    if ind is None:
+                        continue
+                    if objects[ind]['inlier']:
+                        continue
+                    print(colored(f"Rejecting detection {detection_list[i]['class_name']} as an outlier\n" * 10, 'magenta'))
+                    pruned_detection_inds.append(i)
+                pruned_detection_inds.sort(reverse=True)
+                for i in pruned_detection_inds:
+                    detection_list.pop(i)
+                    match_indices.pop(i)
 
-            #     # Add back in objects bsed on POCD
-            #     # TODO: Add back in objects based on POCD
+                    # Add back in objects bsed on POCD
+                    # TODO: Add back in objects based on POCD
 
         ##### End POCD Update
 
@@ -886,27 +894,7 @@ def main(cfg : DictConfig):
             # Note: Removed 'match_method' and 'phys_bias' as they do not appear in the provided merge function
         )
 
-        if cfg.use_pocd:
-            objects.mergeObjectsWithRecentObjects(pruned_object_inds, dissapeared_match_indices)
-            to_remove = []
-            for ind in dissapeared_match_indices:
-                if ind is None:
-                    continue
-                objects.pop(ind)
-                for i, match_ind in enumerate(match_indices):
-                    if match_ind is None:
-                        continue
-                    if match_ind == ind:
-                        to_remove.append(i)
-                    if match_ind > ind:
-                        match_indices[i] -= 1
-            to_remove.sort(reverse=True)
-            for i in to_remove:
-                match_indices.pop(i)
-                detection_list.pop(i)
-
-
-        map_edges = process_edges(match_indices, gobs, len(objects), objects, map_edges)
+        # map_edges = process_edges(match_indices, gobs, len(objects), objects, map_edges)
 
         is_final_frame = False #frame_idx == len(dataset) - 1 ... Still needed for other function signatures
 
