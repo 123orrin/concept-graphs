@@ -546,7 +546,7 @@ class ProbabilisticMapObjectList(MapObjectList):
         matches = []
         transforms = []
         for missing_object_ind in inds:
-            print(f"Matching dissapeared object {self[missing_object_ind]['class_name']} to recent objects")
+            # print(f"Matching dissapeared object {self[missing_object_ind]['class_name']} to recent objects")
             potential_match_inds = []
             for i, obj in enumerate(self):
                 if i == missing_object_ind:
@@ -564,7 +564,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             
             if len(potential_match_inds) == 0:
                 # No potential matches
-                print(f"No potential matches for dissapeared object {self[missing_object_ind]['class_name']}")
+                # print(f"No potential matches for dissapeared object {self[missing_object_ind]['class_name']}")
                 matches.append(None)
                 transforms.append(np.eye(4))
                 continue
@@ -591,8 +591,8 @@ class ProbabilisticMapObjectList(MapObjectList):
             matches.append(match_ind)
             transforms.append(registration_results.transformation)
 
-            print(f"Matched dissapeared object {self[missing_object_ind]['class_name']} to object {self[match_ind]['class_name']} with visual similarity {visual_sim[max_ind]}")
-            print(f"Transformation: {registration_results.transformation}")
+            # print(f"Matched dissapeared object {self[missing_object_ind]['class_name']} to object {self[match_ind]['class_name']} with visual similarity {visual_sim[max_ind]}")
+            # print(f"Transformation: {registration_results.transformation}")
     
         return matches, transforms
     
@@ -615,29 +615,124 @@ class ProbabilisticMapObjectList(MapObjectList):
         """
         Take in a list of removed objects and match them to recently added objects.
         """
-        for obj in removed_object_list:
-            obj['time_of_disappearance'] = obj['last_observed_time']
-        all_objs = self + removed_object_list
-        inds = range(len(self), len(all_objs))
-        matches, transforms = all_objs.matchDissapearedObjectsToRecentObjects(look_back_time, look_forward_time, inds)
-        return matches, transforms
+        matches = []
+        transforms = []
+        for missing_object in removed_object_list:
+            # print(f"Matching dissapeared object {self[missing_object_ind]['class_name']} to recent objects")
+            potential_match_inds = []
+            for i, obj in enumerate(self):
+                # Check if an object was instatiated near the time the object dissapeared
+                dissapeared_time = missing_object['time_of_disappearance']
+                instatiated_time = obj['first_observed_time']
+                if instatiated_time < dissapeared_time - look_back_time:
+                    # The object was instatiated too long ago
+                    continue
+                if instatiated_time > dissapeared_time + look_forward_time:
+                    # The object was instatiated too long after the object dissapeared
+                    continue
+                potential_match_inds.append(i)
+            
+            if len(potential_match_inds) == 0:
+                # No potential matches
+                # print(f"No potential matches for dissapeared object {self[missing_object_ind]['class_name']}")
+                matches.append(None)
+                transforms.append(np.eye(4))
+                continue
 
+            # Compute visual similarity between potential matches
+            potential_objects = []
+            for i in potential_match_inds:
+                potential_objects.append(self[i]['clip_ft'])
+            potential_objects = torch.stack(potential_objects)
+            query_object = missing_object['clip_ft']
+            visual_sim = F.cosine_similarity(potential_objects, query_object)
+
+            # Return object index with highest similarity
+            max_ind = visual_sim.argmax().item()
+            match_ind = potential_match_inds[max_ind]
+
+            # Compute transformation between the two objects
+            registration_results = self.getICPRegistration(missing_object['pcd'], self[match_ind]['pcd'], threshold=0.01, max_iteration=100)
+            if np.all(registration_results.transformation == np.eye(4)):
+                matches.append(None)
+                transforms.append(np.eye(4))
+                continue
+
+            matches.append(match_ind)
+            transforms.append(registration_results.transformation)
+
+            # print(f"Matched dissapeared object {self[missing_object_ind]['class_name']} to object {self[match_ind]['class_name']} with visual similarity {visual_sim[max_ind]}")
+            # print(f"Transformation: {registration_results.transformation}")
+    
+        return matches, transforms
+    
     def reinstateRemovedObjects(self, removed_object_list, matches):
         """
         Reinstate the removed objects based on the matches and transformations
         """
-        all_objs = self + removed_object_list
-        inds = range(len(self), len(all_objs))
-        all_objs.mergeObjectsWithRecentObjects(inds, matches)
-        self = all_objs[:len(self)]
-        return True
+        assert len(removed_object_list) == len(matches), 'Dissapeared and matched indices must be the same length'
 
+        extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number']
+        add_attributes = ['num_detections', 'num_obj_in_class']
+        skip_attributes = ['id', 'class_name', 'is_background', 'new_counter', 'curr_obj_num', 'inst_color']  # 'inst_color' just keeps obj1's
+        custom_handled = ['pcd', 'bbox', 'clip_ft', 'text_ft', 'n_points']
+
+        pocd_skip_attributes = ['confidence_history', 'first_observed_time', 'pocd_confidence', 'age', 'lost_time', 'eps', 'inlier', 'type']
+        pocd_mean_attributes = ['a', 'b', 'mu', 'sig', 'pocd_confidence']
+        pocd_custom_attributes = ['last_observed_time', 'time_of_disappearance']
+
+        skip_attributes += pocd_skip_attributes
+        custom_handled += pocd_custom_attributes
+
+        # Check for unhandled keys and throw an error if there are
+        all_handled_keys = set(extend_attributes + add_attributes + skip_attributes + custom_handled + pocd_mean_attributes)
+        unhandled_keys = set(self[0].keys()) - all_handled_keys
+        if unhandled_keys:
+            raise ValueError(f"Unhandled keys detected in obj2: {unhandled_keys}. Please update the merge function to handle these attributes.")
+        
+
+        for d_ind, m_ind in enumerate(matches):
+            if m_ind is None:
+                continue
+            # Process extend and add attributes
+            for attr in extend_attributes:
+                if attr in removed_object_list[d_ind] and attr in self[m_ind]:
+                    removed_object_list[d_ind][attr].extend(self[m_ind][attr])
+            
+            for attr in add_attributes:
+                if attr in removed_object_list[d_ind] and attr in self[m_ind]:
+                    removed_object_list[d_ind][attr] += self[m_ind][attr]
+
+            # Process custom
+            removed_object_list[d_ind]['pcd'] = self[m_ind]['pcd']
+            removed_object_list[d_ind]['clip_ft'] = self[m_ind]['clip_ft']
+            removed_object_list[d_ind]['bbox'] = self[m_ind]['bbox']
+            removed_object_list[d_ind]['n_points'] = self[m_ind]['n_points']
+            
+            removed_object_list[d_ind]['last_observed_time'] = self[m_ind]['last_observed_time']
+            removed_object_list[d_ind]['time_of_disappearance'] = -1
+
+            # Process mean attributes
+            for attr in pocd_mean_attributes:
+                if attr in removed_object_list[d_ind] and attr in self[m_ind]:
+                    removed_object_list[d_ind][attr] = (removed_object_list[d_ind][attr] + self[m_ind][attr]) / 2
+
+            self[m_ind] = removed_object_list[d_ind]
+            print(f"Reinstated object {self[m_ind]['class_name']}\n" * 10)
+        return True
+    
+        
 
 
 class POCDObjectTypes(Enum):
     DYNAMIC = 0
     STATIC = 1
     DISSAPEARED = 2
+
+class ObjectLocations(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
 
 # not sure if I will use this 
 class MapEdge():

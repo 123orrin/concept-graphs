@@ -734,6 +734,8 @@ def main(cfg : DictConfig):
 
         for obj in objects:
             obj['confidence_history'] += [obj['pocd_confidence']]
+        for obj in objects_missing:
+            obj['confidence_history'] += [obj['pocd_confidence']]
 
         if len(detection_list) == 0: # no detections, skip
             if len(expected_inds) > 0:
@@ -846,6 +848,7 @@ def main(cfg : DictConfig):
                 to_remove = [i for i in list(to_remove) if i is not None]
                 to_remove.sort(reverse=True)
                 for ind in to_remove:
+                    objects_missing.append(objects[ind])
                     objects.pop(ind)
                     locations_in_list = []
                     for i, match_ind in enumerate(match_indices):
@@ -874,8 +877,23 @@ def main(cfg : DictConfig):
                     detection_list.pop(i)
                     match_indices.pop(i)
 
-                    # Add back in objects bsed on POCD
-                    # TODO: Add back in objects based on POCD
+                # Add back in objects bsed on POCD
+                # TODO: Add back in objects based on POCD\
+                print(f"Objects missing: {[obj['class_name'] for obj in objects_missing]}")
+                removed_matches, transforms = objects.matchRemovedObjectsToRecentObjects(objects_missing, cfg.look_back_time, cfg.look_forward_time)
+                for i, match_ind in enumerate(removed_matches):
+                    if match_ind is not None:
+                        print(colored(f"Adding back {objects_missing[i]} as {objects[match_ind]}", 'green'))
+                objects.reinstateRemovedObjects(objects_missing, removed_matches)
+
+                to_remove = set()
+                for i, match in enumerate(removed_matches):
+                    if match is None:
+                        continue
+                    to_remove.add(i)
+                to_remove = sorted(list(to_remove), reverse=True)
+                for i in to_remove:
+                    objects_missing.pop(i)
 
         ##### End POCD Update
 
