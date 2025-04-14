@@ -942,8 +942,6 @@ def main(cfg : DictConfig):
         orr_log_objs_pcd_and_bbox(objects, obj_classes)
         orr_log_edges(objects, map_edges, obj_classes)
 
-        query_service_node._attach_objects(objects)
-
         if cfg.save_objects_all_frames:
             save_objects_for_frame(
                 obj_all_frames_out_path,
