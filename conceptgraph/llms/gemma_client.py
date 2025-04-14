@@ -1,0 +1,91 @@
+# Copyright (c) Hello Robot, Inc.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the LICENSE file in the root directory
+# of this source tree.
+#
+# Some code may be adapted from other open-source works with their respective licenses. Original
+# license information maybe found below, if so.
+
+import timeit
+from typing import Any, Dict, Optional, Union
+
+import torch
+from termcolor import colored
+from transformers import pipeline
+
+from conceptgraph.llms.base import AbstractLLMClient, AbstractPromptBuilder
+
+
+class Gemma2bClient(AbstractLLMClient):
+    def __init__(
+        self,
+        prompt: Union[str, AbstractPromptBuilder],
+        prompt_kwargs: Optional[Dict[str, Any]] = None,
+        max_tokens: int = 4096,
+        device: str = "cuda",
+    ):
+        super().__init__(prompt, prompt_kwargs)
+        assert device in ["cuda", "mps"], f"Invalid device: {device}"
+        self.max_tokens = max_tokens
+        self.pipe = pipeline(
+            "text-generation",
+            model="google/gemma-2-2b-it",
+            model_kwargs={"torch_dtype": torch.bfloat16},
+            device=device,
+        )
+
+    def __call__(self, command: str, verbose: bool = False):
+        if self.is_first_message():
+            new_message = {"role": "user", "content": self.system_prompt + command}
+        else:
+            new_message = {"role": "user", "content": command}
+
+        self.add_history(new_message)
+        # Prepare the messages including the conversation history
+        messages = self.get_history()
+        t0 = timeit.default_timer()
+        outputs = self.pipe(messages, max_new_tokens=self.max_tokens)
+        t1 = timeit.default_timer()
+        assistant_response = outputs[0]["generated_text"][-1]["content"].strip()
+
+        # Add the assistant's response to the conversation history
+        self.add_history({"role": "assistant", "content": assistant_response})
+        if verbose:
+            print(f"Assistant response: {assistant_response}")
+            print(f"Time taken: {t1 - t0:.2f}s")
+        return assistant_response
+
+
+if __name__ == "__main__":
+    from conceptgraph.llms.prompts import HEATMAP_SYSTEM_PROMPT
+
+    system_prompt = HEATMAP_SYSTEM_PROMPT
+
+    # prompt = ObjectManipNavPromptBuilder()
+    client = Gemma2bClient(system_prompt)
+
+    def test_heatmap_llm(object_query, object_list):
+        prompt = f"input list: [{', '.join(object_list)}]\ninput object: {object_query}\noutput: "
+        output = client(prompt)
+        print(f"Output: {output}")
+
+    object_query = "spoon"
+    object_list = ["table", "chair", "couch", "lamp"]
+    test_heatmap_llm(object_query, object_list)
+    
+    object_query = "fork"
+    object_list = ["table", "chair", "couch", "lamp"]
+    test_heatmap_llm(object_query, object_list)
+
+    object_query = "lamp"
+    object_list = ["bowl", "plate", "fork", "spoon", "chair", "table", "bed", "couch"]
+    test_heatmap_llm(object_query, object_list)
+
+    # for _ in range(50):
+    #     msg = input("Enter a message (empty to quit): ")
+    #     if len(msg) == 0:
+    #         break
+    #     response = client(msg)
+    #     print(colored("You said:", "green"), msg)
+    #     print(colored("Response", "blue"), response)
