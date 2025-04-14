@@ -100,8 +100,9 @@ from conceptgraph.slam.mapping import (
 from conceptgraph.utils.model_utils import compute_clip_features_batched
 from conceptgraph.utils.general_utils import get_vis_out_path, cfg_to_dict, check_run_detections
 from conceptgraph.dataset.conceptgraphs_datautils import scale_intrinsics
-from conceptgraph.utils.llm import POCDLLM
-from transformers import pipeline
+from conceptgraph.occupancygrid.utils import add_objects_to_occupancy_grid, dilate_map, show_occupancy_grid
+from conceptgraph.llms.llama_client import LlamaClient
+from conceptgraph.llms.prompts import POCD_SYSTEM_PROMPT, HEATMAP_SYSTEM_PROMPT
 
 import rclpy
 from rclpy.node import Node
@@ -112,8 +113,7 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 import ros2_numpy.point_cloud2 as point_cloud2
 from message_filters import Subscriber as MF_Subscriber, ApproximateTimeSynchronizer
-from lsy_interfaces.srv import ConceptGraphQuery
-
+from nav_msgs.msg import OccupancyGrid
 import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
 
@@ -121,6 +121,9 @@ from enum import Enum
 
 
 DEBUG = True
+# Disable torch gradient computation
+torch.set_grad_enabled(False)
+
 
 class Subscriber(Node):
     def __init__(self, cfg):
@@ -152,6 +155,8 @@ class Subscriber(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        self.sub_map = self.create_subscription(OccupancyGrid, 'map', self._map_callback, 1)
+
         self.ready_to_process = False
         self.map_with_button = cfg.map_with_button
         self.should_map = False
@@ -161,6 +166,9 @@ class Subscriber(Node):
         self.depth = None
         self.pose = None
         self.changes = np.array([])
+        self.map = None
+        self.map_info = None
+        self.i = 0
 
     def callback_sync(self, info_msg, color_msg, depth_msg):
         self.ready_to_process = False
@@ -178,6 +186,16 @@ class Subscriber(Node):
 
     def _joy_callback(self, msg):
         self.should_map = msg.axes[-1] == 1
+
+    def _map_callback(self, msg):
+        self.map_info = dict()
+        self.map_info["resolution"] = msg.info.resolution
+        self.map_info["origin"] = (msg.info.origin.position.x, msg.info.origin.position.y, msg.info.origin.position.z)
+        self.map_info["width"] = msg.info.width
+        self.map_info["height"] = msg.info.height
+        # self.map = np.flip(np.array(msg.data).reshape(msg.info.height, msg.info.width), axis=0)
+        self.map = np.array(msg.data).reshape(msg.info.height, msg.info.width)
+        self.i += 1
 
     def _process_inputs(self, info_msg, color_msg, depth_msg):
         # Process all inputs
@@ -357,60 +375,6 @@ class Subscriber(Node):
             print(f"Failed to get pose: {e}")
             return None
     
-class QueryNode(Node):
-    def __init__(self):
-        super().__init__('query_node')
-        self.query_service = self.create_service(ConceptGraphQuery, 'conceptgraph_query_service', self.query_callback)
-
-        self.clip_model = None
-        self.clip_tokenizer = None
-        self.objects = None
-
-    def query_callback(self, request, response):
-        if not self.objects:
-            response.object_center = Point()
-            return
-        text_query = request.query
-        text_queries = [text_query]
-        
-        text_queries_tokenized = self.clip_tokenizer(text_queries).to("cuda")
-        text_query_ft = self.clip_model.encode_text(text_queries_tokenized)
-        text_query_ft = text_query_ft / text_query_ft.norm(dim=-1, keepdim=True)
-        text_query_ft = text_query_ft.squeeze()
-        
-        # similarities = objects.compute_similarities(text_query_ft)
-        objects_clip_fts = self.objects.get_stacked_values_torch("clip_ft")
-        objects_clip_fts = objects_clip_fts.to("cuda")
-        similarities = F.cosine_similarity(
-            text_query_ft.unsqueeze(0), objects_clip_fts, dim=-1
-        )
-        max_value = similarities.max()
-        min_value = similarities.min()
-        probs = F.softmax(similarities, dim=0)
-        max_prob_idx = torch.argmax(probs)
-
-        max_prob_object = self.objects[max_prob_idx]
-        center = max_prob_object["bbox"].center
-        print(f"Most probable object is at index {max_prob_idx} with class name '{max_prob_object['class_name']}'")
-        print(f"location xyz: {center}")
-
-        object_center = Point()
-        object_center.x, object_center.y, object_center.z = center
-        response.object_center = object_center
-        return response
-
-    def _attach_model(self, model):
-        self.clip_model = model
-
-    def _attach_tokenizer(self, tokenizer):
-        self.clip_tokenizer = tokenizer
-    
-    def _attach_objects(self, objects):
-        self.objects = objects
-    
-
-# Disable torch gradient computation
-torch.set_grad_enabled(False)
 
 # A logger for this file
 @hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_stretch")
@@ -480,7 +444,8 @@ def main(cfg : DictConfig):
         # LLM
         print("Setting up LLM...")
         openai_client = get_openai_client()
-        pocd_llm = POCDLLM(cfg.llm_model_id, num_reprompt_tries=3)
+        llamaClient = LlamaClient(POCD_SYSTEM_PROMPT, max_tokens=20)
+        pocd_type_cache = {}
         print("LLM setup complete.")
 
         
@@ -796,16 +761,27 @@ def main(cfg : DictConfig):
 
         ##### Perform POCD update
         if cfg.use_pocd:
-            # match_ids = [objects[i]['id'] if i is not None else None for i in match_indices]
             # # Use LLM to learn the object type: Dynamic (0), Semi-Static (1), or Static (2)
             obj_class_list = [obj["class_name"] for obj in detection_list]
-            # # object_type, retries = pocd_llm.run_inference(obj_class_list, max_response_length=200)
-            # # object_type, retries = pocd_llm.run_inference_single(obj_class_list, max_response_length=100)
-            object_type = [POCDObjectTypes.STATIC.value] * len(obj_class_list)
-            # retries = "NO LLM"
-            # print(colored(f"LLM input: {obj_class_list}", 'green'))
-            # print(colored(f"LLM output: {object_type}", 'green'))
-            # print(colored(f"LLM retries: {retries}", 'red'))
+            objects_types = [None] * len(obj_class_list)
+            cached_types = pocd_type_cache.keys()
+            for i, c in enumerate(obj_class_list):
+                if c in cached_types:
+                    objects_types[i] = pocd_type_cache[c]
+                    continue
+
+                prompt = f"{c}\n"
+                response, confidence = llamaClient.run_voting(prompt, num_votes=3)
+                response = response.split(".")[0]
+                print(colored(f"Object: {c}, Response: {response}, Confidence: {confidence}"), 'blue')
+
+                object_type = POCDObjectTypes.DYNAMIC.value
+                if response == "semi-static":
+                    object_type = POCDObjectTypes.STATIC.value
+                elif response == "static":
+                    object_type = POCDObjectTypes.STATIC.value
+                objects_types[i] = object_type
+                pocd_type_cache[c] = object_type
             
             if expected_inds:
                 # Get Object Changes
@@ -1005,6 +981,13 @@ def main(cfg : DictConfig):
         plt.ylabel('POCD Confidence')
         plt.title('POCD Confidence Over Time')
         plt.pause(0.05)
+
+        # if node.i % 5 == 0:
+        #     plt.clf()
+        #     grid = add_objects_to_occupancy_grid(node.map, node.map_info, objects, max_height=2)
+        #     show_occupancy_grid(grid)
+        #     grid = dilate_map(grid, node.map_info, 0.15)
+        #     show_occupancy_grid(grid)
 
         ### Downsample
         for obj in objects:
