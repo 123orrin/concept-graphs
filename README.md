@@ -185,7 +185,7 @@ mamba install https://anaconda.org/pytorch3d/pytorch3d/0.7.4/download/linux-64/p
 mamba install -c conda-forge cudatoolkit-dev
 
 # Install the other required libraries
-python3 -m pip install tyro open_clip_torch wandb h5py openai hydra-core distinctipy ultralytics dill supervision open3d imageio natsort kornia rerun-sdk pyliblzfse pypng git+https://github.com/ultralytics/CLIP.git
+python3 -m pip install tyro open_clip_torch wandb h5py openai hydra-core distinctipy ultralytics dill supervision open3d imageio natsort kornia rerun-sdk pyliblzfse pypng git+https://github.com/ultralytics/CLIP.git termcolor transformers
 
 # You also need to ensure that the installed packages can find the right cuda installation.
 # You can do this by setting the CUDA_HOME environment variable.
