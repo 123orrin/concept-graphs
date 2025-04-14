@@ -117,13 +117,10 @@ from nav_msgs.msg import OccupancyGrid
 import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
 
-from enum import Enum
-
 
 DEBUG = True
 # Disable torch gradient computation
 torch.set_grad_enabled(False)
-
 
 class Subscriber(Node):
     def __init__(self, cfg):
@@ -373,8 +370,8 @@ class Subscriber(Node):
             return self._process_pose(transform_msg)
         except Exception as e:
             print(f"Failed to get pose: {e}")
-            return None
-    
+            return None    
+        
 
 # A logger for this file
 @hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_stretch")
@@ -471,15 +468,10 @@ def main(cfg : DictConfig):
     frame_idx = -1
 
     node = Subscriber(cfg=cfg)
-    query_service_node = QueryNode()
-    query_service_node._attach_model(clip_model)
-    query_service_node._attach_tokenizer(clip_tokenizer)
-    query_service_node._attach_objects(objects)
     while rclpy.ok():
         
         while not node.ready_to_process:
             rclpy.spin_once(node, timeout_sec=0)
-            rclpy.spin_once(query_service_node, timeout_sec=0)
         node.ready_to_process = False
 
         local_time = time.time()
@@ -725,7 +717,6 @@ def main(cfg : DictConfig):
                     "objects_this_frame": len(detection_list),
                 })
             
-            query_service_node._attach_objects(objects)
             if cfg.save_objects_all_frames:
                 save_objects_for_frame(
                     obj_all_frames_out_path,
