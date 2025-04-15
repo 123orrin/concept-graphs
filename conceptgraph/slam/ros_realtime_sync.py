@@ -976,7 +976,11 @@ def main(cfg : DictConfig):
             query_input = input("Enter your query for the heatmap: ").strip()
             if query_input:
                 print(f"Enabled heatmap generation for '{query_input}'")
-                query_clip_feature = clip_tokenizer.encode(query_input)
+                text_queries = [query_input]
+                text_queries_tokenized = clip_tokenizer(text_queries).to("cuda")
+                query_clip_feature = clip_model.encode_text(text_queries_tokenized)
+                query_clip_feature = query_clip_feature / query_clip_feature.norm(dim=-1, keepdim=True)
+                # query_clip_feature = query_clip_feature.squeeze()
             else:
                 print("Disabled heatmap generation")
                 query_clip_feature = None

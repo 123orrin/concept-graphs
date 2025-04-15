@@ -13,12 +13,17 @@ def get_object_heatmap(map: np.ndarray, map_info: dict, prior_clip_feature: np.n
     grid = update_heatmap_with_locations(grid, prior_clip_feature, objects)
     return grid
 
-def get_similar_objects(prior_clip_feature: np.ndarray, objects: ProbabilisticMapObjectList, similarity_threshold: float=0.9) -> tuple[list,list]:
+def get_similar_objects(prior_clip_feature: torch.tensor, objects: ProbabilisticMapObjectList, similarity_threshold: float=0.9) -> tuple[list,list]:
     """
     Get the similar objects based on the CLIP feature.
     """
+    objects_clip_fts = objects.get_stacked_values_torch("clip_ft")
+    objects_clip_fts = objects_clip_fts.to("cuda")
+
     features = torch.stack([obj['clip_ft'] for obj in objects])
-    visual_sim = F.cosine_similarity(features, prior_clip_feature)
+    visual_sim = F.cosine_similarity(
+        prior_clip_feature, objects_clip_fts, dim=-1
+    )
     similar_objects = []
     similarity_scores = []
     for i, obj in enumerate(objects):
