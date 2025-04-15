@@ -179,7 +179,9 @@ class Subscriber(Node):
 
     def _joy_callback(self, msg):
         self.should_map = msg.axes[-1] == 1
-        self.query_heatmap = msg.buttons[3] == 1 # CIRCLE
+        if not self.query_heatmap and bool(msg.buttons[3]):
+            self.query_heatmap = True
+            print("Toggled heatmap query")
 
     def _map_callback(self, msg):
         self.map_info = dict()
@@ -973,13 +975,14 @@ def main(cfg : DictConfig):
         plt.title('POCD Confidence Over Time')
 
         if node.query_heatmap:
+            node.query_heatmap = False
             query_input = input("Enter your query for the heatmap: ").strip()
             if query_input:
                 print(f"Enabled heatmap generation for '{query_input}'")
                 text_queries = [query_input]
                 text_queries_tokenized = clip_tokenizer(text_queries).to("cuda")
                 query_clip_feature = clip_model.encode_text(text_queries_tokenized)
-                query_clip_feature = query_clip_feature / query_clip_feature.norm(dim=-1, keepdim=True)
+                # query_clip_feature = query_clip_feature / query_clip_feature.norm(dim=-1, keepdim=True)
                 # query_clip_feature = query_clip_feature.squeeze()
             else:
                 print("Disabled heatmap generation")
@@ -988,11 +991,11 @@ def main(cfg : DictConfig):
         if query_clip_feature is not None:
             heatmap = get_object_heatmap(node.map, node.map_info, query_clip_feature, objects)
 
-            plt.figure(1)
-            plt.imshow(node.map, cmap='gray', alpha=0.5)
-            plt.imshow(heatmap, cmap='hot', alpha=0.7)
-            plt.title(f"Heatmap for query: {query_input}")
-            plt.colorbar()
+        plt.figure(1)
+        plt.imshow(node.map, cmap='gray', alpha=0.5)
+        plt.imshow(heatmap, cmap='hot', alpha=0.7)
+        plt.title(f"Heatmap for query: {query_input}")
+        plt.colorbar()
 
         plt.pause(0.01)
 

@@ -7,10 +7,11 @@ import torch
 from torch.nn import functional as F
 
 def get_object_heatmap(map: np.ndarray, map_info: dict, prior_clip_feature: np.ndarray, objects: ProbabilisticMapObjectList) -> np.ndarray:
-    grid = np.zeros(map.shape)
     similar_objects, similarity_scores = get_similar_objects(prior_clip_feature, objects)
-    grid = get_prior_from_clip_feature(grid, map_info, prior_clip_feature, similar_objects, similarity_scores)
-    grid = update_heatmap_with_locations(grid, prior_clip_feature, objects)
+    
+    grid = np.zeros(map.shape)
+    # grid = get_prior_from_clip_feature(grid, map_info, similar_objects, similarity_scores)
+    grid = update_heatmap_with_locations(grid, prior_clip_feature, similar_objects)
     return grid
 
 def get_similar_objects(prior_clip_feature: torch.tensor, objects: ProbabilisticMapObjectList, similarity_threshold: float=0.9) -> tuple[list,list]:
@@ -57,15 +58,14 @@ def update_heatmap_with_locations(map: np.ndarray, map_info: dict, similar_objec
     for obj in similar_objects:
         centroids = obj['centroid_locations']
         centroids_cell = [convert_world_to_cell((centroid[1], centroid[0]), map_info) for centroid in centroids]
-        estimated_density_function = gaussian_kde(centroids_cell)
+        estimated_density_function = gaussian_kde(np.vstack(centroids_cell).T)
         Y,X = np.mgrid[0:map.shape[0], 0:map.shape[1]]
         positions = np.vstack([Y.ravel(), X.ravel()])
         values = estimated_density_function(positions)
         values = values.reshape(map.shape)
         map += values
+        # TODO multiply with the similarity score
 
-    map = map / np.sum(map)
-    return map
 
 def smoothen_distribution(distribution: np.ndarray, sigma: float=10) -> np.ndarray:
     """
