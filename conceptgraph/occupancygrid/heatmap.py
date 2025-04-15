@@ -1,52 +1,68 @@
 from conceptgraph.slam.utils_no_sampling import ProbabilisticMapObjectList
 from conceptgraph.occupancygrid.utils import convert_world_to_cell
 from scipy.ndimage import gaussian_filter
+from scipy.stats import gaussian_kde
 import numpy as np
 import torch
 from torch.nn import functional as F
 
-def get_object_heatmap(map: np.ndarray, map_info: dict, query_object: dict, objects: ProbabilisticMapObjectList):
+def get_object_heatmap(map: np.ndarray, map_info: dict, prior_clip_feature: np.ndarray, objects: ProbabilisticMapObjectList) -> np.ndarray:
     grid = np.zeros(map.shape)
-    grid = get_prior_from_object(query_object, objects)
-    grid = update_heatmap_with_locations(grid, query_object)
-    grid = normalize_distribution(grid)
+    similar_objects, similarity_scores = get_similar_objects(prior_clip_feature, objects)
+    grid = get_prior_from_clip_feature(grid, map_info, prior_clip_feature, similar_objects, similarity_scores)
+    grid = update_heatmap_with_locations(grid, prior_clip_feature, objects)
     return grid
 
-def get_prior_from_object(map: np.ndarray, map_info: dict, query_object: dict, objects: ProbabilisticMapObjectList) -> np.ndarray:
-    other_objects = [obj for obj in objects if obj is not query_object]
-    features = torch.stack([obj['clip_ft'] for obj in other_objects])
-    visual_sim = F.cosine_similarity(features, query_object['clip_ft'])
-
+def get_similar_objects(prior_clip_feature: np.ndarray, objects: ProbabilisticMapObjectList, similarity_threshold: float=0.9) -> tuple[list,list]:
+    """
+    Get the similar objects based on the CLIP feature.
+    """
+    features = torch.stack([obj['clip_ft'] for obj in objects])
+    visual_sim = F.cosine_similarity(features, prior_clip_feature)
+    similar_objects = []
+    similarity_scores = []
     for i, obj in enumerate(objects):
+        sim = visual_sim[i].item()
+        if sim > similarity_threshold:
+            similar_objects.append(obj)
+            similarity_scores.append(sim)
+    return similar_objects, similarity_scores
+
+def get_prior_from_clip_feature(map: np.ndarray, map_info: dict, similar_objects: list, similarity_scores: list) -> np.ndarray:
+    """
+    Get the prior from the CLIP feature.
+    """
+    for obj, sim in zip(similar_objects, similarity_scores):
         upper = obj['bbox'].get_max_bound()
         lower = obj['bbox'].get_min_bound()
         # upper = obj['pcd'].get_max_bound()
         # lower = obj['pcd'].get_min_bound()
-        corners = [(lower[1], lower[0]), (upper[1], upper[0])]
-        # left-bottom, right-top
+        corners = [(lower[1], lower[0]), (upper[1], upper[0])] # left-bottom, right-top
         corners = [convert_world_to_cell(corner, map_info) for corner in corners]
-        map[corners[0][0]:corners[1][0], corners[0][1]:corners[1][1]] = visual_sim[i].item()
+        map[corners[0][0]:corners[1][0], corners[0][1]:corners[1][1]] = sim
 
     map = smoothen_distribution(map, sigma=0.3)
     map = map / np.sum(map)
     return map
 
-def update_heatmap_with_locations(map: np.ndarray, query_object: dict) -> np.ndarray:
+def update_heatmap_with_locations(map: np.ndarray, map_info: dict, similar_objects: list) -> np.ndarray:
     """
-    Update the heatmap with the locations of the query object.
+    Update heatmap with the centroid location of similar objects
     """
-    upper = query_object['bbox'].get_max_bound()
-    lower = query_object['bbox'].get_min_bound()
-    # upper = query_object['pcd'].get_max_bound()
-    # lower = query_object['pcd'].get_min_bound()
-    corners = [(lower[1], lower[0]), (upper[1], upper[0])]
-    # left-bottom, right-top
-    corners = [convert_world_to_cell(corner, map_info) for corner in corners]
-    map[corners[0][0]:corners[1][0], corners[0][1]:corners[1][1]] = 1.0
+    for obj in similar_objects:
+        centroids = obj['centroid_locations']
+        centroids_cell = [convert_world_to_cell((centroid[1], centroid[0]), map_info) for centroid in centroids]
+        estimated_density_function = gaussian_kde(centroids_cell)
+        Y,X = np.mgrid[0:map.shape[0], 0:map.shape[1]]
+        positions = np.vstack([Y.ravel(), X.ravel()])
+        values = estimated_density_function(positions)
+        values = values.reshape(map.shape)
+        map += values
+
+    map = map / np.sum(map)
     return map
 
-
-def smoothen_distribution(distribution: np.ndarray, sigma: float=0.3) -> np.ndarray:
+def smoothen_distribution(distribution: np.ndarray, sigma: float=10) -> np.ndarray:
     """
     Smoothen the distribution using a Gaussian filter.
     """

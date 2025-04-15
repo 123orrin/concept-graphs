@@ -532,7 +532,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             self.pop(i)
         return True
 
-    def matchDissapearedObjectsToRecentObjects(self, look_back_time: int=10, look_forward_time: int=10, inds: list=[]):
+    def matchDissapearedObjectsToRecentObjects(self, look_back_time: int=10, look_forward_time: int=10, inds: list=[], threshold: float=0.7):
         """
         Matches dissapeared objects to the objects that were instatiated near its dissapearence. This is able to match objects that "dissapeared" but were actually just moved nearby AND are still visible in the same frame. 
 
@@ -579,6 +579,10 @@ class ProbabilisticMapObjectList(MapObjectList):
 
             # Return object index with highest similarity
             max_ind = visual_sim.argmax().item()
+            if visual_sim[max_ind] < threshold:
+                matches.append(None)
+                transforms.append(np.eye(4))
+                continue
             match_ind = potential_match_inds[max_ind]
 
             # Compute transformation between the two objects
@@ -611,7 +615,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             source_pcd, target_pcd, threshold, transform_init, o3d.pipelines.registration.TransformationEstimationPointToPoint(), o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iteration))
         return registration_results
 
-    def matchRemovedObjectsToRecentObjects(self, removed_object_list, look_back_time: int=10, look_forward_time: int=10):
+    def matchRemovedObjectsToRecentObjects(self, removed_object_list, look_back_time: int=10, look_forward_time: int=10, threshold: float=0.7):
         """
         Take in a list of removed objects and match them to recently added objects.
         """
@@ -649,17 +653,22 @@ class ProbabilisticMapObjectList(MapObjectList):
 
             # Return object index with highest similarity
             max_ind = visual_sim.argmax().item()
-            match_ind = potential_match_inds[max_ind]
-
-            # Compute transformation between the two objects
-            registration_results = self.getICPRegistration(missing_object['pcd'], self[match_ind]['pcd'], threshold=0.01, max_iteration=100)
-            if np.all(registration_results.transformation == np.eye(4)):
+            if visual_sim[max_ind] < threshold:
                 matches.append(None)
                 transforms.append(np.eye(4))
                 continue
+            match_ind = potential_match_inds[max_ind]
+
+            # Compute transformation between the two objects
+            # registration_results = self.getICPRegistration(missing_object['pcd'], self[match_ind]['pcd'], threshold=0.01, max_iteration=100)
+            # if np.all(registration_results.transformation == np.eye(4)):
+            #     matches.append(None)
+            #     transforms.append(np.eye(4))
+            #     continue
 
             matches.append(match_ind)
-            transforms.append(registration_results.transformation)
+            transforms.append(np.eye(4))
+            # transforms.append(registration_results.transformation)
 
             # print(f"Matched dissapeared object {self[missing_object_ind]['class_name']} to object {self[match_ind]['class_name']} with visual similarity {visual_sim[max_ind]}")
             # print(f"Transformation: {registration_results.transformation}")
@@ -723,15 +732,19 @@ class ProbabilisticMapObjectList(MapObjectList):
     
         
 
-
 class POCDObjectTypes(Enum):
     DYNAMIC = 0
     STATIC = 1
     DISSAPEARED = 2
 
 class ObjectLocations(dict):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, radius: float=0.1, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    def add(self, object_class: str, location: np.ndarray):
+        if object_class not in self:
+            self[object_class] = []
+        self[object_class].append(location)
     
 
 # not sure if I will use this 

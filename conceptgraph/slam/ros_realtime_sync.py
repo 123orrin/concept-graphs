@@ -4,12 +4,9 @@ The script is used to model Grounded SAM detections in 3D, it assumes the tag2te
 
 # Standard library imports
 import os
-import copy
-import uuid
 from pathlib import Path
 import pickle
 import gzip
-import pdb
 from termcolor import colored
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -18,11 +15,8 @@ import time
 # Third-party imports
 import cv2
 import numpy as np
-import scipy.ndimage as ndi
 import torch
 from PIL import Image
-import open3d as o3d
-from open3d.io import read_pinhole_camera_parameters
 from omegaconf import DictConfig
 import hydra
 from omegaconf import DictConfig
@@ -122,6 +116,7 @@ DEBUG = True
 # Disable torch gradient computation
 torch.set_grad_enabled(False)
 
+
 class Subscriber(Node):
     def __init__(self, cfg):
         super().__init__('subscriber')
@@ -165,7 +160,6 @@ class Subscriber(Node):
         self.changes = np.array([])
         self.map = None
         self.map_info = None
-        self.i = 0
 
     def callback_sync(self, info_msg, color_msg, depth_msg):
         self.ready_to_process = False
@@ -190,9 +184,7 @@ class Subscriber(Node):
         self.map_info["origin"] = (msg.info.origin.position.x, msg.info.origin.position.y, msg.info.origin.position.z)
         self.map_info["width"] = msg.info.width
         self.map_info["height"] = msg.info.height
-        # self.map = np.flip(np.array(msg.data).reshape(msg.info.height, msg.info.width), axis=0)
         self.map = np.array(msg.data).reshape(msg.info.height, msg.info.width)
-        self.i += 1
 
     def _process_inputs(self, info_msg, color_msg, depth_msg):
         # Process all inputs
@@ -441,7 +433,7 @@ def main(cfg : DictConfig):
         # LLM
         print("Setting up LLM...")
         openai_client = get_openai_client()
-        llamaClient = LlamaClient(POCD_SYSTEM_PROMPT, max_tokens=20)
+        # llamaClient = LlamaClient(POCD_SYSTEM_PROMPT, max_tokens=20)
         pocd_type_cache = {}
         print("LLM setup complete.")
 
@@ -570,7 +562,12 @@ def main(cfg : DictConfig):
             # increment total object detections
             tracker.increment_total_detections(len(curr_det.xyxy))
 
-            # Save results
+            # Save results        # if node.i % 5 == 0:
+        #     plt.clf()
+        #     grid = add_objects_to_occupancy_grid(node.map, node.map_info, objects, max_height=2)
+        #     show_occupancy_grid(grid)
+        #     grid = dilate_map(grid, node.map_info, 0.15)
+        #     show_occupancy_grid(grid)
             # Convert the detections to a dict. The elements are in np.array
             results = {
                 # add new uuid for each detection 
@@ -754,25 +751,25 @@ def main(cfg : DictConfig):
         if cfg.use_pocd:
             # # Use LLM to learn the object type: Dynamic (0), Semi-Static (1), or Static (2)
             obj_class_list = [obj["class_name"] for obj in detection_list]
-            objects_types = [None] * len(obj_class_list)
-            cached_types = pocd_type_cache.keys()
-            for i, c in enumerate(obj_class_list):
-                if c in cached_types:
-                    objects_types[i] = pocd_type_cache[c]
-                    continue
+            objects_types = [POCDObjectTypes.DYNAMIC.value] * len(obj_class_list)
+            # cached_types = pocd_type_cache.keys()
+            # for i, c in enumerate(obj_class_list):
+            #     if c in cached_types:
+            #         objects_types[i] = pocd_type_cache[c]
+            #         continue
 
-                prompt = f"{c}\n"
-                response, confidence = llamaClient.run_voting(prompt, num_votes=3)
-                response = response.split(".")[0]
-                print(colored(f"Object: {c}, Response: {response}, Confidence: {confidence}"), 'blue')
+            #     prompt = f"{c}\n"
+            #     response, confidence = llamaClient.run_voting(prompt, num_votes=3)
+            #     response = response.split(".")[0]
+            #     print(colored(f"Object: {c}, Response: {response}, Confidence: {confidence}"), 'blue')
 
-                object_type = POCDObjectTypes.DYNAMIC.value
-                if response == "semi-static":
-                    object_type = POCDObjectTypes.STATIC.value
-                elif response == "static":
-                    object_type = POCDObjectTypes.STATIC.value
-                objects_types[i] = object_type
-                pocd_type_cache[c] = object_type
+            #     object_type = POCDObjectTypes.DYNAMIC.value
+            #     if response == "semi-static":
+            #         object_type = POCDObjectTypes.STATIC.value
+            #     elif response == "static":
+            #         object_type = POCDObjectTypes.STATIC.value
+            #     objects_types[i] = object_type
+            #     pocd_type_cache[c] = object_type
             
             if expected_inds:
                 # Get Object Changes
@@ -970,13 +967,6 @@ def main(cfg : DictConfig):
         plt.ylabel('POCD Confidence')
         plt.title('POCD Confidence Over Time')
         plt.pause(0.05)
-
-        # if node.i % 5 == 0:
-        #     plt.clf()
-        #     grid = add_objects_to_occupancy_grid(node.map, node.map_info, objects, max_height=2)
-        #     show_occupancy_grid(grid)
-        #     grid = dilate_map(grid, node.map_info, 0.15)
-        #     show_occupancy_grid(grid)
 
         ### Downsample
         for obj in objects:
