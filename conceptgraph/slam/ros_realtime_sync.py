@@ -95,6 +95,7 @@ from conceptgraph.utils.model_utils import compute_clip_features_batched
 from conceptgraph.utils.general_utils import get_vis_out_path, cfg_to_dict, check_run_detections
 from conceptgraph.dataset.conceptgraphs_datautils import scale_intrinsics
 from conceptgraph.occupancygrid.utils import add_objects_to_occupancy_grid, dilate_map, show_occupancy_grid
+from conceptgraph.occupancygrid.heatmap import get_object_heatmap
 from conceptgraph.llms.llama_client import LlamaClient
 from conceptgraph.llms.prompts import POCD_SYSTEM_PROMPT, HEATMAP_SYSTEM_PROMPT
 
@@ -152,6 +153,7 @@ class Subscriber(Node):
         self.ready_to_process = False
         self.map_with_button = cfg.map_with_button
         self.should_map = False
+        self.query_heatmap = False
 
         self.info = None
         self.color = None
@@ -177,6 +179,7 @@ class Subscriber(Node):
 
     def _joy_callback(self, msg):
         self.should_map = msg.axes[-1] == 1
+        self.query_heatmap = msg.buttons[3] == 1 # CIRCLE
 
     def _map_callback(self, msg):
         self.map_info = dict()
@@ -460,6 +463,7 @@ def main(cfg : DictConfig):
     frame_idx = -1
 
     node = Subscriber(cfg=cfg)
+    query_clip_feature = None
     while rclpy.ok():
         
         while not node.ready_to_process:
@@ -950,6 +954,7 @@ def main(cfg : DictConfig):
                 color_path
             )
         
+        plt.figure(0)
         plt.clf()
         data = []
         for obj in objects:
@@ -966,7 +971,26 @@ def main(cfg : DictConfig):
         plt.xlabel('Frame Index')
         plt.ylabel('POCD Confidence')
         plt.title('POCD Confidence Over Time')
-        plt.pause(0.05)
+
+        if node.query_heatmap:
+            query_input = input("Enter your query for the heatmap: ").strip()
+            if query_input:
+                print(f"Enabled heatmap generation for '{query_input}'")
+                query_clip_feature = clip_tokenizer.encode(query_input)
+            else:
+                print("Disabled heatmap generation")
+                query_clip_feature = None
+            
+        if query_clip_feature is not None:
+            heatmap = get_object_heatmap(node.map, node.map_info, query_clip_feature, objects)
+
+            plt.figure(1)
+            plt.imshow(node.map, cmap='gray', alpha=0.5)
+            plt.imshow(heatmap, cmap='hot', alpha=0.7)
+            plt.title(f"Heatmap for query: {query_input}")
+            plt.colorbar()
+
+        plt.pause(0.01)
 
         ### Downsample
         for obj in objects:
