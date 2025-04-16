@@ -966,20 +966,23 @@ def main(cfg : DictConfig):
                 # query_clip_feature = query_clip_feature / query_clip_feature.norm(dim=-1, keepdim=True)
                 # query_clip_feature = query_clip_feature.squeeze()
             else:
-                print("Disabled heatmap generation")
+                print("Disabled heatmap generation!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                 query_clip_feature = None
             
         if query_clip_feature is not None:
             heatmap = get_object_heatmap(node.map, node.map_info, query_clip_feature, objects)
 
-            plt.figure(1)
+            f = plt.figure(1)
             # plt.imshow(node.map, cmap='gray', alpha=0.5)
-            plt.imshow(heatmap, cmap='hot')
-            # show_occupancy_grid(heatmap, cmap='hot')
+            print(f"updating, {node.map.shape}")
+            plt.clf()
+            plt.imshow(np.flip(heatmap, axis=0), cmap='hot')
+            plt.xlim((0, node.map.shape[1]))
+            plt.ylim((0, node.map.shape[0]))
             plt.title(f"Heatmap for query: {query_input}")
-            # plt.colorbar()
+            f.canvas.draw()
 
-        plt.pause(0.01)
+        plt.pause(0.1)
 
         ### Downsample
         for obj in objects:

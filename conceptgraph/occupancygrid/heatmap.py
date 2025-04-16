@@ -62,13 +62,18 @@ def update_heatmap_with_locations(map: np.ndarray, map_info: dict, similar_objec
     """
     for obj, sim in zip(similar_objects, similarity_scores):
         centroids = np.vstack(obj['centroid_locations'])[:,:2].T
-        estimated_density_function = gaussian_kde(centroids)
+        # estimated_density_function = gaussian_kde(centroids)
         Y, X = np.mgrid[0:map.shape[0], 0:map.shape[1]]
         Y, X = convert_cell_to_world((Y,X), map_info)
-
         positions = np.vstack([Y.ravel(), X.ravel()])
-        values = estimated_density_function(positions)
-        values = values.reshape(map.shape)
+
+        # for now sample from gaussian pdf around each observed point
+        covariance = 0.5
+        pdf = np.sum((1 / (2 * np.pi * covariance ** 0.5)) * \
+                np.exp(-0.5 * ((positions[0,:][np.newaxis] - centroids[1,:][np.newaxis].T) ** 2 + (positions[1,:][np.newaxis] - centroids[0,:][np.newaxis].T) ** 2) / covariance), axis=0)
+
+        # values = estimated_density_function(positions)
+        values = pdf.reshape(map.shape)
         map += values * sim
     return map
 
