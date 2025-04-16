@@ -975,6 +975,7 @@ def main(cfg : DictConfig):
             plt.figure(1)
             # plt.imshow(node.map, cmap='gray', alpha=0.5)
             plt.imshow(heatmap, cmap='hot')
+            # show_occupancy_grid(heatmap, cmap='hot')
             plt.title(f"Heatmap for query: {query_input}")
             # plt.colorbar()
 

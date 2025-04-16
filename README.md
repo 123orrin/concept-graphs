@@ -147,7 +147,7 @@ This 1.5 hours long Youtube video is detailed getting started tutorial covering 
 
 ConceptGraphs is built using Python. We recommend using [Anaconda](https://www.anaconda.com/download) to manage your python environment. It creates a separate environment for each project, which is useful for managing dependencies and ensuring that you don't have conflicting versions of packages from other projects.
 
-**NOTE:** Sometimes certain versions of ubuntu/windows, python, pytorch and cuda may not work well together. Unfortunately this means you may need to do some trial and error to get everything working. We have included the versions of the packages we used on our machines, which ran Ubuntu 20.04.
+**NOTE:** Sometimes certain versions of ubuntu/windows, python, pytorch and cuda may not work well together. Unfortunately this means you may need to do some trial and error to get everything working. We have included the versions of the packages we used on our machines, which ran Ubuntu 22.04.
 
 To create your python environment, run the following commands:
 
@@ -157,11 +157,7 @@ mamba activate ros_cg
 
 # Add ros2_numpy for converting numpy to ROS 2 messages
 export ROS2_WS  # The location of your ROS 2 workspace if you haven't created this already. Add this to your bashrc
-cd $ROS2_WS/src
-git clone git@github.com:Box-Robotics/ros2_numpy.git
-# Build the ROS workspace. If you build the workspace with a different ROS before, remove all the buid files and build from scratch
 cd $ROS2_WS
-colcon build
 source install/setup.bash
 
 # OR: Create the mamba environment (you can find the instructions for installing mamba here: https://github.com/conda-forge/miniforge)
@@ -185,7 +181,7 @@ mamba install https://anaconda.org/pytorch3d/pytorch3d/0.7.4/download/linux-64/p
 mamba install -c conda-forge cudatoolkit-dev
 
 # Install the other required libraries
-python3 -m pip install tyro open_clip_torch wandb h5py openai hydra-core distinctipy ultralytics dill supervision open3d imageio natsort kornia rerun-sdk pyliblzfse pypng git+https://github.com/ultralytics/CLIP.git termcolor transformers==4.44.0 accelerate lark
+python3 -m pip install tyro open_clip_torch wandb h5py openai hydra-core distinctipy ultralytics dill supervision open3d imageio natsort kornia rerun-sdk pyliblzfse pypng git+https://github.com/ultralytics/CLIP.git termcolor transformers==4.44.0 accelerate lark ros2_numpy
 
 # You also need to ensure that the installed packages can find the right cuda installation.
 # You can do this by setting the CUDA_HOME environment variable.

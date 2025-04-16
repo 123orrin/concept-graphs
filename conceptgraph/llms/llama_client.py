@@ -74,7 +74,6 @@ class LlamaClient(AbstractLLMClient):
             is_valid = self._validate_output(assistant_response, command)
         
         if not is_valid:
-            # print(self.get_history_as_str())
             error = f"Invalid output: {assistant_response}"
             # raise ValueError(error)
             print(colored(error, 'yellow'))

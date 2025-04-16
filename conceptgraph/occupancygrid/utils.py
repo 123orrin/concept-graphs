@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 import scipy
 import scipy.signal
 from scipy.ndimage import gaussian_filter, binary_dilation
@@ -37,7 +38,6 @@ def add_objects_to_occupancy_grid(occupancy_grid: np.ndarray, occupancy_info: di
         corners = [(lower[1], lower[0]), (upper[1], upper[0])]
         # left-bottom, right-top
         corners = [convert_world_to_cell(corner, occupancy_info) for corner in corners]
-        print(corners)
         mask[corners[0][0]:corners[1][0], corners[0][1]:corners[1][1]] = True
 
     grid[mask] = OccupancyGridValue.OCCUPIED.value
@@ -56,7 +56,6 @@ def convert_world_to_cell(world: tuple, occupancy_info: dict) -> tuple:
     """
     Convert world coordinates to a cell.
     """
-    print("occupancy_info", occupancy_info)
     resolution = occupancy_info['resolution']
     origin = occupancy_info['origin']
     y = int((world[0] - origin[1]) / resolution) # Coords are (y,x) but origin is (x,y,z)
@@ -65,39 +64,21 @@ def convert_world_to_cell(world: tuple, occupancy_info: dict) -> tuple:
     assert 0 <= y < occupancy_info['height'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. y: %d, height: %d" % (y, occupancy_info['height'])
     return (y, x)
 
-def show_occupancy_grid(occupancy_grid: np.ndarray):
+def show_occupancy_grid(occupancy_grid: np.ndarray, cmap='viridis'):
     """
     Display the occupancy grid.
     """
-    import matplotlib.pyplot as plt
     grid = deepcopy(occupancy_grid)
     grid = np.flip(grid, axis=0)
-    # grid[grid == OccupancyGridValue.UNKNOWN] = -1
-    # grid[grid == OccupancyGridValue.FREE] = 0
-    # grid[grid == OccupancyGridValue.OCCUPIED] = 1
-    print("OCCUPIED")
-    print(np.sum(grid == OccupancyGridValue.OCCUPIED.value))
-    print("FREE")
-    print(np.sum(grid == OccupancyGridValue.FREE.value))
-    print("UNKNOWN")
-    print(np.sum(grid == OccupancyGridValue.UNKNOWN.value))
-    plt.imshow(grid, cmap='viridis')
-    plt.show()
 
-# def dilate_map(occupancy_grid: np.ndarray, occupancy_info: dict, dilatation_amount_metres: float) -> np.ndarray:
-#     """
-#     Dilate the occupancy grid.
-#     """
-#     grid = deepcopy(occupancy_grid)
-#     dilation_amount_cell = int(dilatation_amount_metres / occupancy_info['resolution'])
-#     dilation = np.ones((dilation_amount_cell, dilation_amount_cell))
-#     mask = grid == OccupancyGridValue.OCCUPIED.value
-#     dilated_grid = scipy.signal.fftconvolve(mask, dilation, mode='same')
-#     for j in range(grid.shape[0]):
-#         for i in range(grid.shape[1]):
-#             if grid[j, i] >= 0:
-#                 grid[j, i] = dilated_grid[j, i]
-#     return grid
+    # print("OCCUPIED")
+    # print(np.sum(grid == OccupancyGridValue.OCCUPIED.value))
+    # print("FREE")
+    # print(np.sum(grid == OccupancyGridValue.FREE.value))
+    # print("UNKNOWN")
+    # print(np.sum(grid == OccupancyGridValue.UNKNOWN.value))
+    plt.imshow(grid, cmap=cmap)
+    plt.show()
 
 def dilate_map(occupancy_grid: np.ndarray, occupancy_info: dict, dilatation_amount_metres: float) -> np.ndarray:
     """
