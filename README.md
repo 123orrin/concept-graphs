@@ -185,7 +185,7 @@ mamba install https://anaconda.org/pytorch3d/pytorch3d/0.7.4/download/linux-64/p
 mamba install -c conda-forge cudatoolkit-dev
 
 # Install the other required libraries
-python3 -m pip install tyro open_clip_torch wandb h5py openai hydra-core distinctipy ultralytics dill supervision open3d imageio natsort kornia rerun-sdk pyliblzfse pypng git+https://github.com/ultralytics/CLIP.git termcolor transformers
+python3 -m pip install tyro open_clip_torch wandb h5py openai hydra-core distinctipy ultralytics dill supervision open3d imageio natsort kornia rerun-sdk pyliblzfse pypng git+https://github.com/ultralytics/CLIP.git termcolor transformers==4.44.0 accelerate lark
 
 # You also need to ensure that the installed packages can find the right cuda installation.
 # You can do this by setting the CUDA_HOME environment variable.
@@ -202,17 +202,23 @@ cd $CG_REPO
 git checkout orrin-dev
 pip install -e .
 ```
-### Running the pipeline
-```bash
-# To run the pipeline using ROS 2 follow these steps after connecting the Orbbec Femto Bolt to your machine
-# Start one terminal and run the following commands. This will start the pipeline to publish the camera poses and the point clouds. Of course this only worked if you have previously followed the steps in: https://github.com/123orrin/ros2_orbbec_slam
-mamba activate ros_cg
-ros2 run sai_orbbec sai_publisher
+### Model Access
+The codebase uses a locally running Llama-3.1-8B instance. This is a gated model and require you to request and receive access. 
 
-# In a second terminal run the following commands. This should open rerun.io and you should see the annotated point cloud and detections when moving the camera around
+1. Create an account on https://huggingface.co/.
+2. Request access to https://huggingface.co/meta-llama/Llama-3.1-8B by submitting the form on the page.
+3. Follow the intructions at https://huggingface.co/docs/huggingface_hub/en/guides/cli to (1) Install huggingface-cli, (2) Generate a user token, and (3) login to huggingface.
+
+### Running the pipeline
+Prerequisites to running the pipeline:
+
+1. Ensure ROS2 is publishing RGB images from your camera
+2. Ensure ROS2 is publishing aligned depth images from your camera
+3. Ensure there is a transform in the ROS2 tf tree from your map frame to the camera image frame
+```bash
 mamba activate ros_cg
 cd $CG_REPO/conceptgraph/slam
-python3 ros_rerun_sai_pcd.py
+python3 ros_realtime_sync.py
 ```
 
 #### Remote Visualization
@@ -233,217 +239,17 @@ sudo apt-get install x11vnc
 x11vnc -display :99 -nopw -forever
 ```
 When starting the VNC server, it will tell you the port (e.g., PORT=5900) that you need for the next step on the local machine. On the local machine start Remmina (comes preinstalled on Ubuntu) and switch to VNC and type REMOTE-IP:PORT and hit enter. 
-Then continue with the same steps as above in Running the pipeline. You may have to export the display environment variable again. 
-crazyflies123
-
-### Datasets
-
-#### Replica 
-Now you will need some data to run the code on, the easiest one to use is the [Replica](https://github.com/facebookresearch/Replica-Dataset). You can install it by using the following commands:
-
-```bash
-cd /path/to/data
-# you can also download the Replica.zip manually through
-# link: https://caiyun.139.com/m/i?1A5Ch5C3abNiL password: v3fY (the zip is split into smaller zips because of the size limitation of caiyun)
-wget https://cvg-data.inf.ethz.ch/nice-slam/data/Replica.zip
-unzip Replica.zip
-```
-
-#### iPhone scan via Record 3D app (r3d file) of a convenience store aisle
-I've also uploaded a scan I took of a convenience store with a lot of objects, you can download that from Kaggle via [this link](https://www.kaggle.com/datasets/alihkw/convinience-store-recording-via-the-record3d-app/). This is a record3d file `.r3d` that we will need to preprocess before we can use it as a dataset. More on that below.
-
-And now you will need to update the paths in the configuration files in the `conceptgraph/hydra_configs` directory to point to your paths. Which is discussed below:
-
-## Usage
-
-We have a lot of scripts with different features, but I reccomend starting with the `rerun_realtime_mapping.py` script, which runs the detections, builds the scene graph, and vizualizes the results all in one loop.
-
-**After you have changed the needed configuration values**, you can run a script with a simple command, for example:
-
-```bash
-# set up your config first as explained below, then
-cd /path/to/code/concept-graphs/conceptgraph/
-python slam/rerun_realtime_mapping.py
-```
-
-
-### Setting up your configuration 
-We use the [hydra](https://hydra.cc/) package to manage the configuration, so you don't have to give it a bunch of command line arguments, just edit the  entries in the corresponding `.yaml` file in `./conceptgraph/hydra_configs/` and run the script.
-
-For example here is my `./conceptgraph/hydra_configs/rerun_realtime_mapping.yaml` file:
-
-```yaml
-defaults:
-  - base
-  - base_mapping
-  - replica
-  - sam
-  - classes
-  - logging_level
-  - _self_
-
-detections_exp_suffix: s_detections_stride_10_run2 # just a convenient name for the detection run
-force_detection: !!bool False
-save_detections: !!bool True
-
-use_rerun: !!bool True
-save_rerun: !!bool True
-
-stride: 10
-exp_suffix: r_mapping_stride_10_run2 # just a convenient name for the mapping run
-```
-
-First the values are loaded from `base.yaml`, then `base_mapping.yaml` then `replica.yaml` and so on. If there is a conflict (i.e. two files are modifying the same config parameter), the values from the earlier file are overwritten. i.e. `replica.yaml` will overwrite any confliting values in `base.yaml` and so on.
-
-Finally `_self_` is loaded, which are te values in `rerun_realtime_mapping.yaml` itself. This is where you can put your own custom values. Also feel free to add your own `.yaml` files to `./conceptgraph/hydra_configs/` and they will be loaded in the same way.
-
-#### Paths
-
-The first thing to set in your config files is where you've installed conceptgraphs and where your data is. Update this in the `./conceptgraph/hydra_configs/base_paaths.yaml` file. For me, it is:
-
-```yaml
-repo_root: /home/kuwajerw/repos/concept-graphs
-data_root: /home/kuwajerw/local_data
-```
-
-### Building the map
-
-To build the map, simply run the following command from the `conceptgraph` directory:
-
-```bash
-cd /path/to/code/concept-graphs/conceptgraph/
-python /slam/rerun_realtime_mapping.py
-```
-
-Note that if you don't have the models installed, it should just automatically download them for you.
-
-The results are saved in the corresponding dataset directory, in a folder called `exps`. It will name the folder with the `exp_suffix` you set in the configuration file, and also save a `config_params.json` file in that folder with the configuration parameters used for the run.
-
-**NOTE:** For convinience, the script will also automatically create a symlink `/concept-graphs/latest_pcd_save` -> `Replica/room0/exps/r_mapping_stride_10_run2/pcd_r_mapping_stride_10_run2.pkl.gz` so you can easily access the latest results by using the `latest_pcd_save` path in your argument to the visualization script.
-
-Here is what the ouput of running the mapping script looks like for `room0` in the `Replica` dataset:
-
-```bash
-.
-./Replica # This is the dataset root
-./Replica/room0 # This is the scene_id
-./Replica/room0/exps # This parent folder of all the results from conceptgraphs
-
-# This is the folder for the run's detections, named according to the exp_suffix
-./Replica/room0/exps/s_detections_stride_10_run2 
-
-# This is where the visualizations are saved, they are images with bounding boxes and masks overlayed
-./Replica/room0/exps/s_detections_stride_10_run2/vis 
-
-# This is where the detection results are saved, they are in the form of pkl.gz files 
-# that contain a dictionary of the detection results
-./Replica/room0/exps/s_detections_stride_10_run2/detections 
-
-# This is the mapping output folder for the specific run, named according to the exp_suffix
-./Replica/room0/exps/r_mapping_stride_10_run2/
-# This is the saved configuration file for the run
-./Replica/room0/exps/r_mapping_stride_10_run2/config_params.json
-# We also save the configuration file of the detection run which was used 
-./Replica/room0/exps/r_mapping_stride_10_run2/config_params_detections.json
-# The mapping results are saved in a pkl.gz file
-./Replica/room0/exps/r_mapping_stride_10_run2/pcd_r_mapping_stride_10_run2.pkl.gz
-# The video of the mapping process is saved in a mp4 file
-./Replica/room0/exps/r_mapping_stride_10_run2/s_mapping_r_mapping_stride_10_run2.mp4
-# If you set save_objects_all_frames=True, then the object mapping results are saved in a folder
-./Replica/room0/exps/r_mapping_stride_10_run2//saved_obj_all_frames
-# In the saved_obj_all_frames folder, there is a folder for each detection run used, and in each of those folders there is a pkl.gz file for each object mapping result
-./Replica/room0/exps/r_mapping_stride_10_run2/saved_obj_all_frames/det_exp_s_detections_stride_10_run2
-
-```
-
-## Running the visualization script
-
-This script allows you to vizluatize the map in 3D and query the map objects with text. The `latest_pcd_save` symlink is used to point to the latest mapping results, but you can also point it to any other mapping results you want to visualize.
-
-```bash
-cd /path/to/code/concept-graphs
-python conceptgraph/scripts/visualize_cfslam_results.py \
-    --result_path latest_pcd_save 
-```
-
-or if you'd like to point it to a specific result, you can just point it to the pkl.gz file directly:
-
-```bash
-cd /path/to/code/concept-graphs
-python conceptgraph/scripts/visualize_cfslam_results.py \
-    --result_path /path/to/data/Replica/room0/exps/r_mapping_stride_10_run2/pcd_r_mapping_stride_10_run2.pkl.gz
-```
-
-## Searching the map with text
-
-Then in the open3d visualizer window, you can use the following key callbacks to change the visualization. 
-* Press `b` to toggle the background point clouds (wall, floor, ceiling, etc.). Only works on the ConceptGraphs-Detect.
-* Press `c` to color the point clouds by the object class from the tagging model. Only works on the ConceptGraphs-Detect.
-* Press `r` to color the point clouds by RGB. 
-* Press `f` and type text in the terminal, and the point cloud will be colored by the CLIP similarity with the input text. 
-* Press `i` to color the point clouds by object instance ID. 
-
-Here is what it looks like to search for "cabinet" in the Replica `room0` scene.
-
-First we run the script, and then press `f` to trigger the `Enter your query:` input 
-
-![CabinetPreSearch](./assets/cg_cabinet_pre_search.jpeg)
-
-And then we can type `cabinet` and press enter, and the point cloud will be colored by the CLIP similarity with the input text.
-
-![CabinetSearch](./assets/cg_cabinet_search.jpeg)
-
-## Using an iPhone as your RGB-D sensor
-
-For this, you'll need to use the Record3D app and buy the premium version which costs arouund $5-10. The scans you make using the app can be exported to an `.r3d` file. You can then use googledrive or a usb cable or something else to get the `.r3d` file on to your computer. Then right click -> extract out it's contents into a folder, and you'll probably wanna rename the folder to a convenient name. 
-
-Then you want to use the `concept-graphs/conceptgraph/dataset/preprocess_r3d_file.py` to convert that into a dataset that conceptgraphs can use. This is also covered in the getting started video. In the `preprocess_r3d_file.py`, set the datapath variable to your extracted r3d folder. So for me it is:
-
-```
-class ProgramArgs:
-    # this folder contains the metadata folder and the rgb folder etc inside it
-    datapath = "/home/kuwajerw/local_data/record3d_scans/co_store" 
-```
-
-Let that script run, and now you'll have a folder called `/home/kuwajerw/local_data/record3d_scans/co_store_preprocessed` which you can use with ConceptGraphs, for which you can follow the same instructions as the Replica dataset.
-
-
-
-## Streaming the map directly from an iPhone as you're doing the scan
-
-If you'd like to skip the dataset making process and build the map in near real time as you're recording the scan, you can use the `concept-graphs/conceptgraph/slam/r3d_stream_rerun_realtime_mapping.py` script for that, it's also covered in the getting started video. First you need to setup the record3D git repo, which requires installing cmake. After that, simply use the [USB streaming option](https://record3d.app/features) in the Record3D app, and then run the `r3d_stream_rerun_realtime_mapping.py` script to start building the map immediately. So that's:
-```
-sudo apt install cmake
-```
-and then, with your `conceptgraph` conda environment active, run these commands from the record3D github [README file](https://github.com/marek-simonik/record3d?tab=readme-ov-file#python)
-```
-git clone https://github.com/marek-simonik/record3d
-cd record3d
-python setup.py install
-```
-and now you can run the `r3d_stream_rerun_realtime_mapping.py` same as the previous scripts. Of course, you will have to have the iPhone streaming via USB to your computer at the same time when you run the script.
-```bash
-cd /path/to/code/concept-graphs/conceptgraph/
-python /slam/r3d_stream_rerun_realtime_mapping.py
-```
+Then continue with the same steps as above in Running the pipeline. You may have to export the display environment variable again.
 
 ## Debugging
 
 We've commited a pre-made vscode debug config file to the repo to make debugging simple. You can find it at `concept-graphs/.vscode/launch.json`. Here you'll find launch commands to run the core scripts talked about in this README. If you're not familiar with the vscode debugger, check out the getting started video, or the vscode [docs](https://code.visualstudio.com/docs/python/debugging).
 
 
-
-## Misc
-
-To stop a script early, you can use the `concept-graphs/conceptgraph/hydra_configs/early_exit.json` file. If you set `early_exit: true` in the file, then the script will exit early after the current iteration is finished. This is useful if you want to stop the script early, but still save the results from the current iteration.
-
-
 ## Troubleshooting
 
-Sometimes for X11 or Qt related errors, I had to put this in my bashrc file to fix it 
+1. Sometimes for X11 or Qt related errors, I had to put this in my bashrc file to fix it 
     
 ```bash
 export XKB_CONFIG_ROOT=/usr/share/X11/xkb
 ```
-
-That's all for now, we will keep updating this README with more information as we go.
