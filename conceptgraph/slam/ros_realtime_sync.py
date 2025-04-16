@@ -211,7 +211,7 @@ class Subscriber(Node):
             interpolation=cv2.INTER_LINEAR,
         )
         # Rotate if necessary
-        if self.cfg.rotate:
+        if self.cfg.rotate_image:
             color = np.rot90(color, -1)
         # Convert to RGB from BGR
         color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
@@ -228,16 +228,6 @@ class Subscriber(Node):
             depth = np.frombuffer(depth_msg.data, dtype=np.uint16).reshape(self.cfg["camera_params"]["image_height"], self.cfg["camera_params"]["image_width"])
         invalid_indices = (depth < self.cfg.min_depth * 1000) | (depth > self.cfg.max_depth * 1000)
         depth[invalid_indices] = 0
-        # # Subsample
-        # depth = depth.flatten()
-        # new_depth = np.zeros_like(depth)
-        # sample_indices = range(0, np.size(depth), self.cfg.subsample_interval)
-        # new_depth[sample_indices] = depth[sample_indices]
-        # new_depth = new_depth.reshape(self.cfg["camera_params"]["image_height"], self.cfg["camera_params"]["image_width"])
-        # depth = new_depth
-        # # Remove floor
-        # sp = np.shape(depth)
-        # depth[int(sp[0] * (7/8)):,:] = 0
         # Resize
         depth = cv2.resize(
             depth.astype(float),
@@ -246,7 +236,7 @@ class Subscriber(Node):
         )
         depth = np.expand_dims(depth, -1)
         # Rotate if necessary
-        if self.cfg.rotate:
+        if self.cfg.rotate_image:
             depth = np.rot90(depth, -1)
         # Clip depth
         # Convert depth to metres
@@ -298,7 +288,7 @@ class Subscriber(Node):
             transform_msg.transform.translation.z
         ])
         # Rotate if necessary
-        if self.cfg.rotate:
+        if self.cfg.rotate_image:
             image_rotation = np.eye(4)
             image_rotation[:3, :3] = R.from_euler('z', -90, degrees=True).as_matrix()
             pose = pose @ image_rotation
@@ -322,7 +312,7 @@ class Subscriber(Node):
             pose_msg.pose.position.z
         ])
         # Rotate if necessary
-        if self.cfg.rotate:
+        if self.cfg.rotate_image:
             image_rotation = np.eye(4)
             image_rotation[:3, :3] = R.from_euler('z', -90, degrees=True).as_matrix()
             pose = pose @ image_rotation
@@ -340,7 +330,7 @@ class Subscriber(Node):
         width_downsample_ratio = float(self.cfg.desired_width) / self.cfg["camera_params"]["image_width"]
         K = scale_intrinsics(K, height_downsample_ratio, width_downsample_ratio)
         # Rotate if necessary
-        if self.cfg.rotate:
+        if self.cfg.rotate_image:
             K[0, 2], K[1, 2] = K[1, 2], K[0, 2] # switch cx, cy
             K[0, 0], K[1, 1] = K[1, 1], K[0, 0] # switch fx, fy
         # Convert to torch tensor (not sure why we do this but its in the original dataset loader)
@@ -453,7 +443,7 @@ def main(cfg : DictConfig):
         obj_all_frames_out_path = get_exp_out_path(cfg.dataset_root, cfg.scene_id, "saved_obj_all_frames")
         os.makedirs(obj_all_frames_out_path, exist_ok=True)
 
-    if cfg.rotate:
+    if cfg.rotate_image:
         vis_camera_width = cfg.desired_height
         vis_camera_height = cfg.desired_width
     else:
@@ -991,11 +981,11 @@ def main(cfg : DictConfig):
         if query_clip_feature is not None:
             heatmap = get_object_heatmap(node.map, node.map_info, query_clip_feature, objects)
 
-        plt.figure(1)
-        plt.imshow(node.map, cmap='gray', alpha=0.5)
-        plt.imshow(heatmap, cmap='hot', alpha=0.7)
-        plt.title(f"Heatmap for query: {query_input}")
-        plt.colorbar()
+            plt.figure(1)
+            # plt.imshow(node.map, cmap='gray', alpha=0.5)
+            plt.imshow(heatmap, cmap='hot')
+            plt.title(f"Heatmap for query: {query_input}")
+            # plt.colorbar()
 
         plt.pause(0.01)
 
@@ -1038,35 +1028,6 @@ def main(cfg : DictConfig):
                 "is_final_frame": is_final_frame,
                 })
     # LOOP OVER -----------------------------------------------------
-    
-    handle_rerun_saving(cfg.use_rerun, cfg.save_rerun, cfg.exp_suffix, exp_out_path)
-
-    # Save the pointcloud
-    if cfg.save_pcd:
-        save_pointcloud(
-            exp_suffix=cfg.exp_suffix,
-            exp_out_path=exp_out_path,
-            cfg=cfg,
-            objects=objects,
-            obj_classes=obj_classes,
-            latest_pcd_filepath=cfg.latest_pcd_filepath,
-            create_symlink=True,
-            edges=map_edges
-        )
-
-    # Save metadata if all frames are saved
-    if cfg.save_objects_all_frames:
-        save_meta_path = obj_all_frames_out_path / f"meta.pkl.gz"
-        with gzip.open(save_meta_path, "wb") as f:
-            pickle.dump({
-                'cfg': cfg,
-                'class_names': obj_classes.get_classes_arr(),
-                'class_colors': obj_classes.get_class_color_dict_by_index(),
-            }, f)
-
-    if run_detections:
-        if cfg.save_video:
-            save_video_detections(det_exp_path)
 
     owandb.finish()
     node.destroy_node()

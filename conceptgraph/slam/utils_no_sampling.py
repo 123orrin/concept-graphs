@@ -747,9 +747,9 @@ def merge_objects(
     map_edges = None,
 ):
     if len(objects) == 0:
-        return objects
+        return objects, map_edges
     if merge_overlap_thresh <= 0:
-        return objects
+        return objects, map_edges
 
     # Assuming compute_overlap_matrix requires only `objects` and `downsample_voxel_size`
     overlap_matrix = compute_overlap_matrix_general(
@@ -805,7 +805,7 @@ def merge_objects(
     if do_edges:
         return objects, map_edges
     else:
-        return objects
+        return objects, map_edges
 
 
 # @profile
@@ -1331,25 +1331,10 @@ def prepare_objects_save_vis(objects: ProbabilisticMapObjectList, downsample_siz
 
 def process_cfg(cfg: DictConfig):
     cfg.dataset_root = Path(cfg.dataset_root)
-    cfg.dataset_config = Path(cfg.dataset_config)
 
     # Get the current date and time and update scene_id accordingly
     current_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
     cfg.scene_id = cfg.scene_id.format(date=current_datetime)
-    
-    if cfg.dataset_config.name != "multiscan.yaml":
-        # For datasets whose depth and RGB have the same resolution
-        # Set the desired image heights and width from the dataset config
-        dataset_cfg = omegaconf.OmegaConf.load(cfg.dataset_config)
-        if cfg.image_height is None:
-            cfg.image_height = dataset_cfg.camera_params.image_height
-        if cfg.image_width is None:
-            cfg.image_width = dataset_cfg.camera_params.image_width
-        print(f"Setting image height and width to {cfg.image_height} x {cfg.image_width}")
-    else:
-        # For dataset whose depth and RGB have different resolutions
-        assert cfg.image_height is not None and cfg.image_width is not None, \
-            "For multiscan dataset, image height and width must be specified"
 
     return cfg
 

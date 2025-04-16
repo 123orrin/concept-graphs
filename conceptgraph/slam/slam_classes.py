@@ -480,7 +480,7 @@ class ProbabilisticMapObjectList(MapObjectList):
         """
         assert len(dissapeared_inds) == len(matched_inds), 'Dissapeared and matched indices must be the same length'
 
-        extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number']
+        extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number', 'centroid_locations']
         add_attributes = ['num_detections', 'num_obj_in_class']
         skip_attributes = ['id', 'class_name', 'is_background', 'new_counter', 'curr_obj_num', 'inst_color']  # 'inst_color' just keeps obj1's
         custom_handled = ['pcd', 'bbox', 'clip_ft', 'text_ft', 'n_points']
@@ -681,7 +681,7 @@ class ProbabilisticMapObjectList(MapObjectList):
         """
         assert len(removed_object_list) == len(matches), 'Dissapeared and matched indices must be the same length'
 
-        extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number']
+        extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number', 'centroid_locations']
         add_attributes = ['num_detections', 'num_obj_in_class']
         skip_attributes = ['id', 'class_name', 'is_background', 'new_counter', 'curr_obj_num', 'inst_color']  # 'inst_color' just keeps obj1's
         custom_handled = ['pcd', 'bbox', 'clip_ft', 'text_ft', 'n_points']
