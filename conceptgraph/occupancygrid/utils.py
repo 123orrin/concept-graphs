@@ -56,9 +56,10 @@ def convert_world_to_cell(world: tuple, occupancy_info: dict) -> tuple:
     """
     Convert world coordinates to a cell.
     """
+    print("occupancy_info", occupancy_info)
     resolution = occupancy_info['resolution']
     origin = occupancy_info['origin']
-    y = int((world[0] - origin[1]) / resolution) # Coords are (y,x) but origina is (x,y,z)
+    y = int((world[0] - origin[1]) / resolution) # Coords are (y,x) but origin is (x,y,z)
     x = int((world[1] - origin[0]) / resolution)
     assert 0 <= x < occupancy_info['width'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. x: %d, width: %d" % (x, occupancy_info['width'])
     assert 0 <= y < occupancy_info['height'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. y: %d, height: %d" % (y, occupancy_info['height'])

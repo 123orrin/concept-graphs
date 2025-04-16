@@ -11,17 +11,22 @@ def get_object_heatmap(map: np.ndarray, map_info: dict, prior_clip_feature: np.n
     
     grid = np.zeros(map.shape)
     # grid = get_prior_from_clip_feature(grid, map_info, similar_objects, similarity_scores)
-    grid = update_heatmap_with_locations(grid, prior_clip_feature, similar_objects)
+    print("similar objects", similar_objects)
+    print("similarity scores", similarity_scores)
+    grid = update_heatmap_with_locations(grid, prior_clip_feature, similar_objects, similarity_scores)
+    grid /= np.sum(grid)
     return grid
 
-def get_similar_objects(prior_clip_feature: torch.tensor, objects: ProbabilisticMapObjectList, similarity_threshold: float=0.9) -> tuple[list,list]:
+def get_similar_objects(prior_clip_feature: torch.tensor, objects: ProbabilisticMapObjectList, similarity_threshold: float=0.2) -> tuple[list,list]:
     """
     Get the similar objects based on the CLIP feature.
     """
     objects_clip_fts = objects.get_stacked_values_torch("clip_ft")
     objects_clip_fts = objects_clip_fts.to("cuda")
 
-    features = torch.stack([obj['clip_ft'] for obj in objects])
+    print("prior_clip_feature", prior_clip_feature.shape)
+    print("objects_clip_fts", objects_clip_fts.shape)
+
     visual_sim = F.cosine_similarity(
         prior_clip_feature, objects_clip_fts, dim=-1
     )
@@ -51,11 +56,11 @@ def get_prior_from_clip_feature(map: np.ndarray, map_info: dict, similar_objects
     map = map / np.sum(map)
     return map
 
-def update_heatmap_with_locations(map: np.ndarray, map_info: dict, similar_objects: list) -> np.ndarray:
+def update_heatmap_with_locations(map: np.ndarray, map_info: dict, similar_objects: list, similarity_scores: list) -> np.ndarray:
     """
     Update heatmap with the centroid location of similar objects
     """
-    for obj in similar_objects:
+    for obj, sim in zip(similar_objects, similarity_scores):
         centroids = obj['centroid_locations']
         centroids_cell = [convert_world_to_cell((centroid[1], centroid[0]), map_info) for centroid in centroids]
         estimated_density_function = gaussian_kde(np.vstack(centroids_cell).T)
@@ -63,8 +68,9 @@ def update_heatmap_with_locations(map: np.ndarray, map_info: dict, similar_objec
         positions = np.vstack([Y.ravel(), X.ravel()])
         values = estimated_density_function(positions)
         values = values.reshape(map.shape)
-        map += values
+        map += values * sim
         # TODO multiply with the similarity score
+    return map
 
 
 def smoothen_distribution(distribution: np.ndarray, sigma: float=10) -> np.ndarray:
