@@ -546,7 +546,6 @@ class ProbabilisticMapObjectList(MapObjectList):
         matches = []
         transforms = []
         for missing_object_ind in inds:
-            # print(f"Matching dissapeared object {self[missing_object_ind]['class_name']} to recent objects")
             potential_match_inds = []
             for i, obj in enumerate(self):
                 if i == missing_object_ind:
@@ -564,7 +563,6 @@ class ProbabilisticMapObjectList(MapObjectList):
             
             if len(potential_match_inds) == 0:
                 # No potential matches
-                # print(f"No potential matches for dissapeared object {self[missing_object_ind]['class_name']}")
                 matches.append(None)
                 transforms.append(np.eye(4))
                 continue
@@ -594,9 +592,6 @@ class ProbabilisticMapObjectList(MapObjectList):
 
             matches.append(match_ind)
             transforms.append(registration_results.transformation)
-
-            # print(f"Matched dissapeared object {self[missing_object_ind]['class_name']} to object {self[match_ind]['class_name']} with visual similarity {visual_sim[max_ind]}")
-            # print(f"Transformation: {registration_results.transformation}")
     
         return matches, transforms
     
@@ -622,7 +617,6 @@ class ProbabilisticMapObjectList(MapObjectList):
         matches = []
         transforms = []
         for missing_object in removed_object_list:
-            # print(f"Matching dissapeared object {self[missing_object_ind]['class_name']} to recent objects")
             potential_match_inds = []
             for i, obj in enumerate(self):
                 # Check if an object was instatiated near the time the object dissapeared
@@ -638,7 +632,6 @@ class ProbabilisticMapObjectList(MapObjectList):
             
             if len(potential_match_inds) == 0:
                 # No potential matches
-                # print(f"No potential matches for dissapeared object {self[missing_object_ind]['class_name']}")
                 matches.append(None)
                 transforms.append(np.eye(4))
                 continue
@@ -669,9 +662,6 @@ class ProbabilisticMapObjectList(MapObjectList):
             matches.append(match_ind)
             transforms.append(np.eye(4))
             # transforms.append(registration_results.transformation)
-
-            # print(f"Matched dissapeared object {self[missing_object_ind]['class_name']} to object {self[match_ind]['class_name']} with visual similarity {visual_sim[max_ind]}")
-            # print(f"Transformation: {registration_results.transformation}")
     
         return matches, transforms
     
@@ -727,7 +717,6 @@ class ProbabilisticMapObjectList(MapObjectList):
                     removed_object_list[d_ind][attr] = (removed_object_list[d_ind][attr] + self[m_ind][attr]) / 2
 
             self[m_ind] = removed_object_list[d_ind]
-            print(f"Reinstated object {self[m_ind]['class_name']}\n" * 10)
         return True
     
         

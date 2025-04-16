@@ -549,7 +549,7 @@ def main(cfg : DictConfig):
             
             # labels, edges, edge_image = make_vlm_edges(image, curr_det, obj_classes, detection_class_labels, det_exp_vis_path, color_path, cfg.make_edges, openai_client)
             # print("")
-            # print("MADE EDGES MADE EDGES MADE EDGES")
+            # print("MADE EDGES MADE EDGES MADE EDGES")occupancy
             # print("")
             # pdb.set_trace()
 
@@ -778,7 +778,6 @@ def main(cfg : DictConfig):
                     if change_list[i] == cfg.pocd_default_change:
                         # objects[index]['type'] = POCDObjectTypes.DISSAPEARED
                         objects[index]['time_of_disappearance'] = local_time
-                        print(colored(f"Object {objects[index]['class_name']} has dissapeared", 'cyan'))
 
                 # Update POCD probabilities
                 objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
@@ -787,13 +786,9 @@ def main(cfg : DictConfig):
                 to_remove = set()
                 pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
                 to_remove.update(pruned_object_inds)
-                for ind in pruned_object_inds:
-                    print(colored(f"Removing object {objects[ind]['class_name']} with probability {objects[ind]['pocd_confidence']}", 'red'))                 
 
                 # Translate objects based on POCD
                 pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold, cfg.pocd_removal_threshold)
-                for i in pruned_object_inds:
-                    print(colored(f"Transforming object {objects[i]['class_name']} with probability {objects[i]['pocd_confidence']}", 'yellow'))
                 
                 # Transform to a detection, if detected
                 # objects.transformObjectsToDetection(expected_object_indices=expected_inds, transform_list=obj_transformations, inds=pruned_object_inds)
@@ -824,6 +819,7 @@ def main(cfg : DictConfig):
                         detection_list.pop(i)
 
                 # Reject detections that are outliers
+                ### TODO: Outlier detection doesn't work (no outliers detected). Fix it or get rid of it.
                 pruned_detection_inds = []
                 for i, ind in enumerate(match_indices):
                     if ind is None:
@@ -838,12 +834,7 @@ def main(cfg : DictConfig):
                     match_indices.pop(i)
 
                 # Add back in objects bsed on POCD
-                # TODO: Add back in objects based on POCD\
-                print(f"Objects missing: {[obj['class_name'] for obj in objects_missing]}")
                 removed_matches, transforms = objects.matchRemovedObjectsToRecentObjects(objects_missing, cfg.look_back_time, cfg.look_forward_time)
-                for i, match_ind in enumerate(removed_matches):
-                    if match_ind is not None:
-                        print(colored(f"Adding back {objects_missing[i]} as {objects[match_ind]}", 'green'))
                 objects.reinstateRemovedObjects(objects_missing, removed_matches)
 
                 to_remove = set()
