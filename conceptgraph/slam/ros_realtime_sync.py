@@ -428,8 +428,9 @@ def main(cfg : DictConfig):
         # LLM
         print("Setting up LLM...")
         openai_client = get_openai_client()
-        # llamaClient = LlamaClient(POCD_SYSTEM_PROMPT, max_tokens=20)
-        pocd_type_cache = {}
+        if cfg.use_pocd_with_llm:
+            llamaClient = LlamaClient(POCD_SYSTEM_PROMPT, max_tokens=20)
+            pocd_type_cache = {}
         print("LLM setup complete.")
 
         
@@ -679,8 +680,6 @@ def main(cfg : DictConfig):
         intrinsics_np = intrinsics.cpu().numpy()
         # Note: Here we are passing in height as width (and vice-versa) since the images got flipped
         expected_inds, expected_ids = objects.expectedToObserve(adjusted_pose, intrinsics_np, cfg['camera_params']['image_width'], cfg['camera_params']['image_height'], cfg.min_depth, cfg.max_depth, cfg['pocd_visibility_threshold'])
-        for i in expected_inds:
-            print(colored(f"Expected to see {objects[i]['class_name']}", 'green'))
 
         for obj in objects:
             obj['confidence_history'] += [obj['pocd_confidence']]
@@ -748,24 +747,25 @@ def main(cfg : DictConfig):
             # # Use LLM to learn the object type: Dynamic (0), Semi-Static (1), or Static (2)
             obj_class_list = [obj["class_name"] for obj in detection_list]
             objects_types = [POCDObjectTypes.DYNAMIC.value] * len(obj_class_list)
-            # cached_types = pocd_type_cache.keys()
-            # for i, c in enumerate(obj_class_list):
-            #     if c in cached_types:
-            #         objects_types[i] = pocd_type_cache[c]
-            #         continue
+            if cfg.use_pocd_with_llm:
+                cached_types = pocd_type_cache.keys()
+                for i, c in enumerate(obj_class_list):
+                    if c in cached_types:
+                        objects_types[i] = pocd_type_cache[c]
+                        continue
 
-            #     prompt = f"{c}\n"
-            #     response, confidence = llamaClient.run_voting(prompt, num_votes=3)
-            #     response = response.split(".")[0]
-            #     print(colored(f"Object: {c}, Response: {response}, Confidence: {confidence}"), 'blue')
+                    prompt = f"{c}\n"
+                    response, confidence = llamaClient.run_voting(prompt, num_votes=3)
+                    response = response.split(".")[0]
+                    print(colored(f"Object: {c}, Response: {response}, Confidence: {confidence}"), 'blue')
 
-            #     object_type = POCDObjectTypes.DYNAMIC.value
-            #     if response == "semi-static":
-            #         object_type = POCDObjectTypes.STATIC.value
-            #     elif response == "static":
-            #         object_type = POCDObjectTypes.STATIC.value
-            #     objects_types[i] = object_type
-            #     pocd_type_cache[c] = object_type
+                    object_type = POCDObjectTypes.DYNAMIC.value
+                    if response == "semi-static":
+                        object_type = POCDObjectTypes.STATIC.value
+                    elif response == "static":
+                        object_type = POCDObjectTypes.STATIC.value
+                    objects_types[i] = object_type
+                    pocd_type_cache[c] = object_type
             
             if expected_inds:
                 # Get Object Changes
