@@ -1,5 +1,54 @@
 defaults:
   - override hydra/job_logging: custom_logging_format
 
-use_wandb: !!bool True
-use_rerun: !!bool False
+### Visualization
+use_rerun: !!bool True
+
+### Saving
+# Save paths
+dataset_root: ${data_root}/external
+scene_id: "{date}_scene"
+color_path: ${dataset_root}/${scene_id}/color
+exp_suffix: r_mapping # helpful label to identify your mapping experiment
+detections_exp_suffix: s_detections # helpful label to identify your detections
+# Items to save
+save_rerun: !!bool True
+latest_pcd_filepath: ${repo_root}/latest_pcd_save
+save_objects_all_frames: !!bool True   # If True, the objects at all timesteps will be saved for future animation
+save_pcd: !!bool True # Saves the final pcd
+periodically_save_pcd: !!bool False # Saves pcd at the specified intervals
+periodically_save_pcd_interval: 10
+force_detection: !!bool True
+save_detections: !!bool True
+save_video: !!bool False
+
+
+### Other
+device: cuda
+use_wandb: !!bool False
+
+camera_params:
+  # ORBBEC FEMTO BOLT
+  image_height: 720
+  image_width: 1280
+  fx: 750.0245971679688
+  fy: 749.7333374023438
+  cx: 636.2642822265625
+  cy: 369.1966247558594
+  # INTEL REALSENSE D435i
+  # image_height: 240
+  # image_width: 424
+  # fx: 303.17822265625
+  # fy: 303.2071228027344
+  # cx: 213.67611694335938
+  # cy: 125.46749877929688
+  png_depth_scale: 1000 #for depth image in png format
+  crop_edge: 0
+
+# Intel low resolution
+# desired_height: 240
+# desired_width: 424
+
+# Orbbec
+desired_height: 360
+desired_width: 640

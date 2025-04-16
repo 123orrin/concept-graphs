@@ -1,0 +1,17 @@
+defaults:
+  - base_paths
+
+use_pocd: !!bool True
+
+llm_model_id: "meta-llama/Meta-Llama-3.1-8B-Instruct" # ["google/gemma-2b-it", "meta-llama/Meta-Llama-3.1-8B-Instruct"]
+
+pocd_default_change: 20 # Metres
+pocd_default_change_std: 0.5 # Metres
+pocd_visibility_threshold: 0.8 # Percentage
+pocd_removal_threshold: 0.5 #0.4 # Percentage
+pocd_transformation_threshold: 0.6 # Percentage
+pocd_detection_rejection_threshold: 0.1 # Metres
+pocd_response: 5 #15
+
+look_back_time: 30 # seconds
+look_forward_time: 30 # seconds
