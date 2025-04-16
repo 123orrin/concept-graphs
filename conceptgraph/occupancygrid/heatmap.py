@@ -1,5 +1,5 @@
 from conceptgraph.slam.utils_no_sampling import ProbabilisticMapObjectList
-from conceptgraph.occupancygrid.utils import convert_world_to_cell
+from conceptgraph.occupancygrid.utils import convert_world_to_cell, convert_cell_to_world
 from scipy.ndimage import gaussian_filter
 from scipy.stats import gaussian_kde
 import numpy as np
@@ -11,9 +11,9 @@ def get_object_heatmap(map: np.ndarray, map_info: dict, prior_clip_feature: np.n
     
     grid = np.zeros(map.shape)
     # grid = get_prior_from_clip_feature(grid, map_info, similar_objects, similarity_scores)
-    print("similar objects", similar_objects)
+    print("similar objects", [o['class_name'] for o in similar_objects])
     print("similarity scores", similarity_scores)
-    grid = update_heatmap_with_locations(grid, prior_clip_feature, similar_objects, similarity_scores)
+    grid = update_heatmap_with_locations(grid, map_info, similar_objects, similarity_scores)
     grid /= np.sum(grid)
     return grid
 
@@ -28,7 +28,7 @@ def get_similar_objects(prior_clip_feature: torch.tensor, objects: Probabilistic
     print("objects_clip_fts", objects_clip_fts.shape)
 
     visual_sim = F.cosine_similarity(
-        prior_clip_feature, objects_clip_fts, dim=-1
+        prior_clip_feature, objects_clip_fts, dim=1
     )
     similar_objects = []
     similarity_scores = []
@@ -61,15 +61,15 @@ def update_heatmap_with_locations(map: np.ndarray, map_info: dict, similar_objec
     Update heatmap with the centroid location of similar objects
     """
     for obj, sim in zip(similar_objects, similarity_scores):
-        centroids = obj['centroid_locations']
-        centroids_cell = [convert_world_to_cell((centroid[1], centroid[0]), map_info) for centroid in centroids]
-        estimated_density_function = gaussian_kde(np.vstack(centroids_cell).T)
-        Y,X = np.mgrid[0:map.shape[0], 0:map.shape[1]]
+        centroids = np.vstack(obj['centroid_locations'])[:,:2].T
+        estimated_density_function = gaussian_kde(centroids)
+        Y, X = np.mgrid[0:map.shape[0], 0:map.shape[1]]
+        Y, X = convert_cell_to_world((Y,X), map_info)
+
         positions = np.vstack([Y.ravel(), X.ravel()])
         values = estimated_density_function(positions)
         values = values.reshape(map.shape)
         map += values * sim
-        # TODO multiply with the similarity score
     return map
 
 
