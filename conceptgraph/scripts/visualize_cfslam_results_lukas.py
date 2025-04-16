@@ -12,8 +12,10 @@ import os
 import pickle
 import gzip
 import argparse
+from pathlib import Path
 
 import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import open3d as o3d
@@ -511,7 +513,7 @@ def main(args):
         param = vis.get_view_control().convert_to_pinhole_camera_parameters()
         o3d.io.write_pinhole_camera_parameters("temp.json", param)
 
-    def identify_desk(vis, query, T_max_bbox=None):
+    def find_desk(vis, query="desk", debug=True):
         max_prob_idx, max_pcd, max_bbox = color_by_clip_sim(vis, query=query)
         print("Most probable object is at index", max_prob_idx)
         print("max pcd:", max_pcd)
@@ -544,14 +546,20 @@ def main(args):
         geometries = []
         entities = [max_pcd]
         planes = []
-        for obox in oboxes:
-            mesh = o3d.geometry.TriangleMesh.create_from_oriented_bounding_box(obox, scale=[1, 1, 0.0001])
-            mesh.paint_uniform_color(obox.color)
+        if debug:
+            for obox in oboxes:
+                mesh = o3d.geometry.TriangleMesh.create_from_oriented_bounding_box(obox, scale=[1, 1, 0.0001])
+                mesh.paint_uniform_color(obox.color)
 
-            print("Color: ", obox.color)
+                print("Color: ", obox.color)
 
-            vis.add_geometry(mesh)
-            planes.append(mesh)
+                vis.add_geometry(mesh)
+                planes.append(mesh)
+
+        return oboxes, planes
+
+    def identify_desk(vis, query, T_max_bbox=None, visualize=False):
+        oboxes, planes = find_desk(vis, query)
 
         # Determine which plane is the table top using T_max_bbox. 
         # The table top should be the plane that is closest to the robot bottom
@@ -594,7 +602,7 @@ def main(args):
         # T_front[:3, :3] = oboxes[2].R
         # T_front[:3, 3] = oboxes[2].center
 
-        # # add frame at table top where z points in the normal direction
+        # add frame at table top where z points in the normal direction
         # frame_top = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.8, origin=[0, 0, 0])
         # frame_top.transform(T_table_top)
 
@@ -607,8 +615,8 @@ def main(args):
         # frame_front.transform(T_front)
 
         return T_table_top, planes
-    
-    def identify_robot_bottom(vis, query="robot"):
+
+    def find_robot(vis, query="robot"):
         max_prob_idx, max_pcd, max_bbox = color_by_clip_sim(vis, query=query)
 
         # labels = np.array(max_pcd.cluster_dbscan(eps=0.15, min_points=10, print_progress=True))
@@ -631,6 +639,11 @@ def main(args):
         max_pcd.colors = o3d.utility.Vector3dVector(max_pcd_colors)
 
         max_pcd, _ = max_pcd.remove_radius_outlier(nb_points=10, radius=0.03)
+
+        return max_pcd
+    
+    def identify_robot_bottom(vis, query="robot"):
+        max_pcd = find_robot(vis, query=query)
         
         # get oriented bounding box
         max_bbox = max_pcd.get_oriented_bounding_box()
@@ -651,10 +664,226 @@ def main(args):
         # Apply translation in positive y axis by the maximum extent of the bounding box
         T_y = np.eye(4)
         T_y[:3, 3] = np.array([0, np.max(max_bbox.extent) / 2.0, 0])
-        T_max_bbox = T_max_bbox @ T_rot @ T_y
+        T_max_bbox = T_max_bbox     
 
         return T_max_bbox, max_bbox, max_pcd
-    
+
+    def identify_robot_transformation_v2(vis, debug=False, y_axis_first=False):
+        # First step: Find the desk and its planes
+        oboxes, _ = find_desk(vis, debug=False)
+
+        # Second step: Find the robot
+        robot_pcd = find_robot(vis, query="robot")
+
+        # Third step: Determine the distance of all robot points to the desk planes
+        distances = []
+        thresholds = []
+        planes = []
+        for obox in oboxes:
+            # Get the normal of the plane
+            normal = obox.R @ np.array([0, 0, 1])
+            center = obox.center
+            bias = -np.dot(normal, center)
+
+            planes.append((normal, bias))
+
+            # Calculate the distance of all points to the plane
+            dist = np.abs(np.dot(robot_pcd.points, normal) + bias) / np.linalg.norm(normal)
+            distances.append(dist)
+
+            percentile = 0.05
+            threshold = np.quantile(dist, percentile)
+            thresholds.append(threshold)
+
+            if debug:
+                # plot a histogram of the distances
+                plt.hist(dist, bins=10)
+                plt.axvline(x=threshold, linestyle='--')            
+        
+        if debug:
+            plt.show()
+
+        # Fourth step: Find the plane that is closest to the bottom of the robot
+        # The plane that is closest to the bottom of the robot is the table top
+        table_top_plane_id = np.argmin(thresholds)
+        table_top_plane = planes[table_top_plane_id]
+        table_top_bbox = oboxes[table_top_plane_id]
+        
+        # Determine the transformation matrix for the table top
+        T_table_top = np.eye(4)
+        T_table_top[:3, :3] = table_top_bbox.R
+        T_table_top[:3, 3] = table_top_bbox.center
+
+        print("Table top plane is at index", table_top_plane_id)
+        print("Table top plane: ", table_top_plane)
+
+        if debug:
+            mesh = o3d.geometry.TriangleMesh.create_from_oriented_bounding_box(table_top_bbox, scale=[1, 1, 0.0001])
+            mesh.paint_uniform_color(obox.color)
+
+            vis.add_geometry(mesh)
+            planes.append(mesh)
+
+            # Add a coordinate frame at the center of the bounding box
+            frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+            frame.transform(T_table_top)
+            vis.add_geometry(frame)        
+
+            # Color the robot point cloud by the distance to the table top plane
+            max_dist = np.max(distances[table_top_plane_id])
+            colors = np.zeros((len(robot_pcd.points), 3))
+            for i, dist in enumerate(distances[table_top_plane_id]):
+                colors[i] = cmap(dist / max_dist)[:3]
+
+            robot_pcd.colors = o3d.utility.Vector3dVector(colors)
+            vis.add_geometry(robot_pcd)
+
+        # Fifth step: Find the bottom of the robot
+        # The points that are closer than the threshold to the table top plane are the bottom of the robot and define the center of the robot base
+        bottom_points = np.asarray(robot_pcd.points)[np.where(distances[table_top_plane_id] < thresholds[table_top_plane_id])]
+        bottom_center = np.mean(bottom_points, axis=0)
+
+        # Project the bottom center to the table top plane
+        normal = table_top_plane[0]
+        bias = table_top_plane[1]
+        projected_center = bottom_center - (np.dot(bottom_center, normal) + bias) / np.linalg.norm(normal) * normal
+
+        if debug:
+            # Add a sphere at the bottom center
+            sphere = create_ball_mesh(bottom_center, 0.05, color=(1, 0, 0))
+            vis.add_geometry(sphere)
+
+            # Add a sphere at the projected center
+            sphere = create_ball_mesh(projected_center, 0.05, color=(0, 1, 0))
+            vis.add_geometry(sphere)
+
+        # Check which side of the plane the robot point cloud is on
+        # If the robot point cloud is on the negative side of the plane, the normal should be flipped
+        robot_pcd_plane_offset = np.dot(robot_pcd.points, normal) + bias
+
+        percentile = 0.05
+        threshold = np.quantile(robot_pcd_plane_offset, percentile)
+        print("Threshold: ", threshold)
+
+        if debug: 
+            # Plot a histogram of the robot point cloud plane offset
+            plt.hist(robot_pcd_plane_offset, bins=10)
+            plt.axvline(x=threshold, linestyle='--')
+            plt.show()    
+
+        if threshold < 0:
+            normal = -normal
+
+        z_axis = normal   
+
+        median_distances = {}
+        if y_axis_first:
+            minimum_median_distance_id = None
+            minimum_median_distance = float('inf')
+        else:
+            maximum_median_distance_id = None
+            maximum_median_distance = 0.0
+        for threshold_id, threshold in enumerate(thresholds):
+            if threshold_id == table_top_plane_id:
+                continue
+
+            dist = distances[threshold_id]
+
+            percentile = 0.5
+            threshold = np.quantile(dist, percentile)
+            median_distances[threshold_id] = threshold
+
+            if y_axis_first:
+                if threshold < minimum_median_distance:
+                    minimum_median_distance = threshold
+                    minimum_median_distance_id = threshold_id
+            else:
+                if threshold > maximum_median_distance:
+                    maximum_median_distance = threshold
+                    maximum_median_distance_id = threshold_id
+
+            if debug:
+                # plot a histogram of the distances
+                plt.hist(dist, bins=10)
+                plt.axvline(x=threshold, linestyle='--')
+                plt.xlim(left=0.0)
+                plt.show()
+
+        if y_axis_first:
+            # The shorter median distance is the plane that is normal to the y-axis of the robot
+            table_side_plane_id = minimum_median_distance_id
+        else:
+            # The longer median distance is the plane that is normal to the x-axis of the robot
+            table_side_plane_id = maximum_median_distance_id
+        
+        table_side_plane = planes[table_side_plane_id]
+
+        if debug:
+            table_side_bbox = oboxes[table_side_plane_id]
+
+            # Determine the transformation matrix for the table side
+            T_table_side = np.eye(4)
+            T_table_side[:3, :3] = table_side_bbox.R
+            T_table_side[:3, 3] = table_side_bbox.center
+
+            print("Table side plane is at index", table_side_plane_id)
+            print("Table side plane: ", table_side_plane)
+            
+            mesh = o3d.geometry.TriangleMesh.create_from_oriented_bounding_box(table_side_bbox, scale=[1, 1, 0.0001])
+            mesh.paint_uniform_color(obox.color)
+
+            vis.add_geometry(mesh)
+            planes.append(mesh)
+
+            # Add a coordinate frame at the center of the bounding box
+            frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+            frame.transform(T_table_side)
+            vis.add_geometry(frame)
+
+        # The considered axis is the normal of the table side plane
+        axis = table_side_plane[0]
+
+        if not y_axis_first:
+            axis = -axis
+
+        # Project the y axis to the table top plane
+        new_axis = axis + projected_center
+        axis = new_axis - (np.dot(new_axis, normal) + bias) / np.linalg.norm(normal) * normal - projected_center
+
+        # Check if y_axis is in the plane
+        if np.abs(np.dot(axis + projected_center, normal) + bias) > 1e-6:
+            print("Axis is not in the plane. Incorrect projection!")
+
+        # The remaining axis is the cross product of the axis and the z axis
+        other_axis = np.cross(axis, z_axis)
+
+        if y_axis_first:
+            x_axis = other_axis
+            y_axis = axis
+        else:
+            x_axis = axis
+            y_axis = other_axis
+
+        # Create the rotation matrix
+        R = np.eye(3)
+        R[:, 0] = x_axis
+        R[:, 1] = y_axis
+        R[:, 2] = z_axis
+
+        # Create the transformation matrix
+        T_robot = np.eye(4)
+        T_robot[:3, :3] = R
+        T_robot[:3, 3] = projected_center
+
+        if debug:
+            # Add a frame at the projected center
+            frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+            frame.transform(T_robot)
+            vis.add_geometry(frame)
+
+        return T_robot
+
+
     def transform_robot_to_origin(T_table_top, T_max_bbox):
         # Place the table top frame at the center of the bounding box while staying on the table top
         T_01 = T_table_top.copy()
@@ -695,9 +924,35 @@ def main(args):
         # T_robot = T_robot @ T_trans
 
         return np.linalg.inv(T_robot)
+    
+    def get_microwave(path):
+        # draw a frame at the origin for reference
+        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
+        vis.add_geometry(frame)
 
-    franka = True
-    revision = True
+        queries = ["door", "microwave body"]
+
+        for query in queries:
+            max_prob_idx, max_pcd, max_bbox = color_by_clip_sim(vis, query=query)
+            print("Most probable object is at index", max_prob_idx)
+            print("max pcd:", max_pcd)
+            print("max bbox:", max_bbox)
+
+            # replace any spaces with underscores in the query
+            query = query.replace(" ", "_")
+
+            # Save the max_pcd to a ply file
+            o3d.io.write_point_cloud(os.path.join(path, "microwave_{}.ply".format(query)), max_pcd)
+
+    # franka = True
+    # revision = True
+    franka = False
+    revision = False
+    grasping = False
+    revision_ral = False
+    new_robot_transform = True
+
+    visualize_debug = True
 
     if franka:
         # draw a frame at the origin for reference
@@ -707,38 +962,44 @@ def main(args):
         # fr3_path = "/home/lukas/Projects/concept-data/record3D/robot_small_preprocessed/fr3_franka.ply"
         # robot_pcd = visualize_fr3(vis, fr3_path)
 
-        query = "robot"
-        T_max_bbox, max_bbox, max_pcd = identify_robot_bottom(vis, query)
-
-        # # Show frame of the bounding box for reference
-        # bbox_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
-        # bbox_frame.transform(T_max_bbox)
-
-        # # remove the bounding boxes
-        # for bbox in bboxes:
-        #     vis.remove_geometry(bbox)
-
-        # vis.add_geometry(bbox_frame)
-        # vis.add_geometry(max_bbox)
-
-        # max_pcd.paint_uniform_color([0.0, 0.0, 1.0])
-        # vis.add_geometry(max_pcd)
-
-        # vis.run()
-        # exit()
-
-        if revision:
-            # query = "robot table"
-            # query = "table"
-            query = "desk"
+        if revision_ral:
+            identify_robot_bottom_v2(vis)
         else:
-            query = "box"
-        T_table_top, planes = identify_desk(vis, query, T_max_bbox)
-        # T_table_top, planes = identify_desk(vis, query)
+            query = "robot"
+            T_max_bbox, max_bbox, max_pcd = identify_robot_bottom(vis, query)
 
-        T_robot = transform_robot_to_origin(T_table_top, T_max_bbox)
+            # # Show frame of the bounding box for reference
+            # bbox_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+            # bbox_frame.transform(T_max_bbox)
 
-        print("T_robot: ", T_robot)
+            # # remove the bounding boxes
+            # for bbox in bboxes:
+            #     vis.remove_geometry(bbox)
+
+            # vis.add_geometry(bbox_frame)
+            # vis.add_geometry(max_bbox)
+
+            # max_pcd.paint_uniform_color([0.0, 0.0, 1.0])
+            # vis.add_geometry(max_pcd)     
+
+            # vis.run()
+            # exit()
+
+            if revision:
+                # query = "robot table"
+                # query = "table"
+                query = "desk"
+            elif revision_ral:
+                query = "desk"
+            else:
+                query = "box"
+
+            T_table_top, planes = identify_desk(vis, query, T_max_bbox)
+            # T_table_top, planes = identify_desk(vis, query)
+
+            T_robot = transform_robot_to_origin(T_table_top, T_max_bbox)
+
+            print("T_robot: ", T_robot)
 
         # # rotate the robot frame by negative 90 degrees in z-axis
         # T_rot = np.eye(4)
@@ -793,7 +1054,19 @@ def main(args):
         # Transform planes
         for plane in planes:
             plane.transform(T_robot)
-            # vis.add_geometry(plane)
+            if visualize_debug:
+                vis.add_geometry(plane)
+
+        if visualize_debug:
+            # draw a frame at the top of the table
+            frame_table_top = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+            frame_table_top.transform(T_robot @ T_table_top)
+            vis.add_geometry(frame_table_top)
+
+            # draw a frame at the bottom of the robot
+            frame_robot_bottom = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+            frame_robot_bottom.transform(T_robot @ T_max_bbox)
+            vis.add_geometry(frame_robot_bottom)
 
         # remove the frames
         frames = [frame]
@@ -804,96 +1077,118 @@ def main(args):
         for p in planes:
             vis.remove_geometry(p)
 
-        # best_grasp_pose = np.load("/home/lukas/Projects/anygrasp/grasp_detection/example_data/best_grasp_pose.npy")
-        print(result_path)
-        scene_id = result_path.split("/")[-4:-3][0]
-        data_dir_base = "/".join(result_path.split("/")[:-4])
-        data_dir = "{}/{}/".format(data_dir_base, scene_id)
-        print(data_dir)
-        min_z = 0.1
-        
-        segmented_poses_filenames = [f for f in os.listdir(data_dir) if f.startswith("segmented_poses")]
-        for segmented_poses_filename in segmented_poses_filenames:
-            image_index = segmented_poses_filename.split("_")[2]
-            print("image_index: ", image_index)
-            text_prompt = "_".join(segmented_poses_filename.split("_")[3:])
-            text_prompt = text_prompt.split(".")[0]
-            print("text_prompt: ", text_prompt)
-            segmented_grasp_poses = np.load(os.path.join(data_dir, segmented_poses_filename))
-            camera_pose = np.load(os.path.join(data_dir, "map2c_{}.npy".format(image_index)))
+        if grasping:
+            # best_grasp_pose = np.load("/home/lukas/Projects/anygrasp/grasp_detection/example_data/best_grasp_pose.npy")
+            print(result_path)
+            scene_id = result_path.split("/")[-4:-3][0]
+            data_dir_base = "/".join(result_path.split("/")[:-4])
+            data_dir = "{}/{}/".format(data_dir_base, scene_id)
+            print(data_dir)
+            min_z = 0.1
+            
+            segmented_poses_filenames = [f for f in os.listdir(data_dir) if f.startswith("segmented_poses")]
+            for segmented_poses_filename in segmented_poses_filenames:
+                image_index = segmented_poses_filename.split("_")[2]
+                print("image_index: ", image_index)
+                text_prompt = "_".join(segmented_poses_filename.split("_")[3:])
+                text_prompt = text_prompt.split(".")[0]
+                print("text_prompt: ", text_prompt)
+                segmented_grasp_poses = np.load(os.path.join(data_dir, segmented_poses_filename))
+                camera_pose = np.load(os.path.join(data_dir, "map2c_{}.npy".format(image_index)))
 
-            # Add camera frame
-            camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
-            camera_frame.transform(T_robot @ np.linalg.inv(camera_pose))
-            vis.add_geometry(camera_frame)
+                # Add camera frame
+                camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+                camera_frame.transform(T_robot @ np.linalg.inv(camera_pose))
+                vis.add_geometry(camera_frame)
 
-            # Transformation by 90 degrees in the positive y axis
-            T_rot_90_y = np.eye(4)
-            T_rot_90_y[:3, :3] = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]])
+                # Transformation by 90 degrees in the positive y axis
+                T_rot_90_y = np.eye(4)
+                T_rot_90_y[:3, :3] = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]])
 
-            num_grasp_poses = segmented_grasp_poses.shape[0]
-            T_grasps = np.zeros((num_grasp_poses, 4, 4))
+                num_grasp_poses = segmented_grasp_poses.shape[0]
+                T_grasps = np.zeros((num_grasp_poses, 4, 4))
 
-            for i in range(num_grasp_poses):
-                T_grasp = T_robot @ np.linalg.inv(camera_pose) @ segmented_grasp_poses[i] @ T_rot_90_y
-                T_grasps[i] = T_grasp
+                for i in range(num_grasp_poses):
+                    T_grasp = T_robot @ np.linalg.inv(camera_pose) @ segmented_grasp_poses[i] @ T_rot_90_y
+                    T_grasps[i] = T_grasp
 
-            # Find the grasp where the z axis of the world frame is best aligned with the z axis of the grasp frame
-            neg_z_axis = np.array([0, 0, -1])
-            best_grasp_idx = None
-            best_dot = -1
-            for i in range(num_grasp_poses):
-                grasp_z = T_grasps[i][:3, 2]
-                dot = np.dot(neg_z_axis, grasp_z)
-                if dot > best_dot:
-                    best_dot = dot
-                    best_grasp_idx = i
+                # Find the grasp where the z axis of the world frame is best aligned with the z axis of the grasp frame
+                neg_z_axis = np.array([0, 0, -1])
+                best_grasp_idx = None
+                best_dot = -1
+                for i in range(num_grasp_poses):
+                    grasp_z = T_grasps[i][:3, 2]
+                    dot = np.dot(neg_z_axis, grasp_z)
+                    if dot > best_dot:
+                        best_dot = dot
+                        best_grasp_idx = i
 
-            T_grasp = T_grasps[best_grasp_idx]
+                T_grasp = T_grasps[best_grasp_idx]
 
-            # Make sure the grasp has sufficient height over the table top
-            print(T_grasp[2, 3])
-            T_grasp[2, 3] = max(T_grasp[2, 3], min_z)
-            print("T_grasp {}:".format(text_prompt), T_grasp)
-            # save to npy file
-            grasp_dir = os.path.join("/".join(result_path.split("/")[:-3]), "T_grasp_{}.npy".format(text_prompt))
-            np.save(grasp_dir, T_grasp)
+                # Make sure the grasp has sufficient height over the table top
+                print(T_grasp[2, 3])
+                T_grasp[2, 3] = max(T_grasp[2, 3], min_z)
+                print("T_grasp {}:".format(text_prompt), T_grasp)
+                # save to npy file
+                grasp_dir = os.path.join("/".join(result_path.split("/")[:-3]), "T_grasp_{}.npy".format(text_prompt))
+                np.save(grasp_dir, T_grasp)
 
-            # for T_grasp in T_grasps:
-            for T_grasp in [T_grasps[best_grasp_idx]]:
-                # draw a frame at the grasp pose
-                frame_grasp = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
-                # Move the grasp by a 0.6 in the y-axis
-                # T_trans = np.eye(4)
-                # T_grasp[:3, 3] += np.array([0, 0.8, 0])
-                frame_grasp.transform(T_grasp)
-                vis.add_geometry(frame_grasp)
+                # for T_grasp in T_grasps:
+                for T_grasp in [T_grasps[best_grasp_idx]]:
+                    # draw a frame at the grasp pose
+                    frame_grasp = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+                    # Move the grasp by a 0.6 in the y-axis
+                    # T_trans = np.eye(4)
+                    # T_grasp[:3, 3] += np.array([0, 0.8, 0])
+                    frame_grasp.transform(T_grasp)
+                    vis.add_geometry(frame_grasp)
 
-            # Create a pose for placing the object
-            T_place = T_grasp.copy()
+                # Create a pose for placing the object
+                T_place = T_grasp.copy()
 
-            if "paper_cup" in text_prompt:
-                # T_place[:3, 3] += np.array([0.6, 0.75, 0])
-                T_place[:3, 3] += np.array([0.5, 0.75, 0])
-            elif "sponge" in text_prompt:
-                T_place[:3, 3] += np.array([-0.25, -0.6, 0])
-                T_place[2, 3] = min_z
+                if "paper_cup" in text_prompt:
+                    # T_place[:3, 3] += np.array([0.6, 0.75, 0])
+                    T_place[:3, 3] += np.array([0.5, 0.75, 0])
+                elif "sponge" in text_prompt:
+                    T_place[:3, 3] += np.array([-0.25, -0.6, 0])
+                    T_place[2, 3] = min_z
 
-            # draw a frame at the place pose
-            frame_place = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
-            frame_place.transform(T_place)
-            vis.add_geometry(frame_place)
+                # draw a frame at the place pose
+                frame_place = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+                frame_place.transform(T_place)
+                vis.add_geometry(frame_place)
 
-            # Save the place pose
-            place_dir = os.path.join("/".join(result_path.split("/")[:-3]), "T_place_{}.npy".format(text_prompt))
-            np.save(place_dir, T_place)
+                # Save the place pose
+                place_dir = os.path.join("/".join(result_path.split("/")[:-3]), "T_place_{}.npy".format(text_prompt))
+                np.save(place_dir, T_place)
 
         # # remove the CAD model robot
         # vis.remove_geometry(robot_pcd)
 
         # remove the bounding boxes
-        for bbox in bboxes:
-            vis.remove_geometry(bbox)
+        if not visualize_debug:
+            for bbox in bboxes:
+                vis.remove_geometry(bbox)
+        else:
+            for bbox in bboxes:
+                vis.remove_geometry(bbox)
+            # Print the bounding box of the robot
+            print("Robot bounding box: ", max_bbox)
+            # Change the color of the robot bounding box
+            max_bbox.color = [0.0, 0.0, 1.0]
+            T_bottom = np.linalg.inv(T_max_bbox)
+            T_bottom = T_robot @ T_max_bbox
+            # transform bounding boxes
+            # max_bbox.rotate(T_bottom[:3, :3])
+            # max_bbox.translate(T_bottom[:3, 3])
+            max_bbox.R = T_bottom[:3, :3]
+            max_bbox.center = T_bottom[:3, 3]
+
+            # Print the max bbox transformation
+            print("max bbox rotation: ", max_bbox.R)
+            print("max bbox translation: ", max_bbox.center)
+
+            vis.add_geometry(max_bbox)
 
         # color_by_clip_sim(vis, query="laptop", highlight_max=False)
 
@@ -906,15 +1201,31 @@ def main(args):
         for i, pcd in enumerate(pcds):
             o3d.io.write_point_cloud("{}_{}.ply".format(filename, i), pcd)
 
-        # Load the saved camera parameters
-        camera_params = load_camera_params("camera_params.json")
-        converted_params = convert_camera_params(camera_params)
-        o3d.visualization.draw(pcds, show_skybox=False, 
-                                        bg_color=[1, 1, 1, 1], lookat=converted_params["lookat"],
-                                        eye=converted_params["eye"], up=-converted_params["up"],
-                                        field_of_view=converted_params["field_of_view"],
-                                        intrinsic_matrix=converted_params["intrinsic_matrix"],
-                                        extrinsic_matrix=converted_params["extrinsic_matrix"])
+        # # Load the saved camera parameters
+        # camera_params = load_camera_params("camera_params.json")
+        # converted_params = convert_camera_params(camera_params)
+        # o3d.visualization.draw(pcds, show_skybox=False, 
+        #                                 bg_color=[1, 1, 1, 1], lookat=converted_params["lookat"],
+        #                                 eye=converted_params["eye"], up=-converted_params["up"],
+        #                                 field_of_view=converted_params["field_of_view"],
+        #                                 intrinsic_matrix=converted_params["intrinsic_matrix"],
+        #                                 extrinsic_matrix=converted_params["extrinsic_matrix"])
+    
+    elif revision_ral:
+        scene_path = Path(os.path.realpath(result_path)).parents[2]
+        microwave_pcd_dir = scene_path / "microwave_pcd"
+        if not os.path.exists(microwave_pcd_dir):
+            os.makedirs(microwave_pcd_dir)
+        get_microwave(microwave_pcd_dir)
+
+    elif new_robot_transform:
+        debug_transform = True
+        # draw a frame at the origin for reference
+        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
+        vis.add_geometry(frame)
+
+        T_robot = identify_robot_transformation_v2(vis, debug=debug_transform)
+
     else:
         # Color the object based on RGB
         color_by_rgb(vis)

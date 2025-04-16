@@ -1,6 +1,7 @@
 import cv2
 import os
 import gc
+import time
 # import PyQt5
 
 # # Set the QT_QPA_PLATFORM_PLUGIN_PATH environment variable
@@ -24,6 +25,7 @@ import open3d as o3d
 import torch
 import torch.nn.functional as F
 import open_clip
+import asyncio
 
 import distinctipy
 
@@ -36,7 +38,7 @@ from conceptgraph.slam.utils import filter_objects, merge_objects
 
 from conceptgraph.scripts.gpt_object_classes import object_classes as ext_scannet_classes
 from conceptgraph.scripts.llm_prompting import required_semantic_safety_constraints
-from conceptgraph.scripts.prompts import semantic_types, constraint_types
+from conceptgraph.scripts.prompts import semantic_types, constraint_types, constraint_groups
 from conceptgraph.scripts.clip_text_cache import CLIPTextCache
 
 
@@ -809,11 +811,12 @@ def main(ral_revision, args, debug_transform=False):
         # If the robot point cloud is on the negative side of the plane, the normal should be flipped
         robot_pcd_plane_offset = np.dot(robot_pcd.points, normal) + bias
 
-        percentile = 0.05
+        percentile = 0.5
         threshold = np.quantile(robot_pcd_plane_offset, percentile)
         print("Threshold: ", threshold)
 
         if debug: 
+            print("CHECK IF THE ROBOT IS ON THE NEGATIVE SIDE OF THE PLANE")
             # Plot a histogram of the robot point cloud plane offset
             plt.hist(robot_pcd_plane_offset, bins=10)
             plt.axvline(x=threshold, linestyle='--')
@@ -1077,6 +1080,8 @@ def main(ral_revision, args, debug_transform=False):
             pcd_paths = os.listdir(pcd_dir)
             pcd_paths = [pcd_path for pcd_path in pcd_paths if pcd_path.endswith(".ply") and not pcd_path[-5].isdigit()]
 
+            print(pcd_paths)
+
             for pcd_path in pcd_paths:
                 obj_id_and_class = pcd_path.rsplit(".", maxsplit=1)[0].split("_", maxsplit=7)[-1]
                 obj_id, obj_class = obj_id_and_class.split("_", maxsplit=1)
@@ -1090,15 +1095,31 @@ def main(ral_revision, args, debug_transform=False):
 
             scene_objects_wo_duplicates = list(set([obj["class_name"] for obj in merged_objects.values()]))
             print(scene_objects_wo_duplicates)
+        
+        # remove "robot" and "robot arm" from the scene objects
+        scene_objects_wo_duplicates = [obj for obj in scene_objects_wo_duplicates if obj not in ["robot", "robot arm"]]
+        scene_objects_wo_duplicates.append("pot")
 
         if args.ee_object is not None:
             ee_object = args.ee_object
-            semantic_safety = required_semantic_safety_constraints([ee_object], 
-                                                                   semantic_types, 
-                                                                   scene_objects_wo_duplicates, 
-                                                                   constraint_types, 
-                                                                   repetitions=3, 
-                                                                   debug=True)
+            async def get_semantics():
+                result = await required_semantic_safety_constraints(
+                    [ee_object],
+                    semantic_types,
+                    scene_objects_wo_duplicates,
+                    constraint_types,
+                    constraint_groups,
+                    repetitions=3,
+                    debug=True
+                )
+                return result
+
+            # Run the async function
+            start_time = time.time()
+            result = asyncio.run(get_semantics())
+            print("Actual Time taken: ", time.time() - start_time)
+
+        exit()
 
         T_OR = identify_robot_transformation(vis, object_classes_dict, debug=debug_transform)
         T_OR[:3, 3] += np.array([0, 0, z_offset])  # Move the robot in z with an offset since there is a metal plate on the table
@@ -1150,7 +1171,7 @@ def main(ral_revision, args, debug_transform=False):
     
 if __name__ == "__main__":
     ral_revision = True
-    debug_transform = False
+    debug_transform = True
 
     parser = get_parser()
     args = parser.parse_args()

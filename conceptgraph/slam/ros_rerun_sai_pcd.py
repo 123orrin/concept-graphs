@@ -10,6 +10,7 @@ from pathlib import Path
 import pickle
 import gzip
 import pdb
+import time
 
 # Third-party imports
 import cv2
@@ -372,7 +373,23 @@ class Subscriber(Node):
     
 #     def _attach_objects(self, objects):
 #         self.objects = objects
-    
+
+# def save_timing_statistics(out_path, timing_statistics):
+#     path = out_path / "timing_statistics.pkl"
+#     print(f"Saving timing statistics to {path}")
+#     with open(path, "wb") as f:
+#         pickle.dump(timing_statistics, f)
+
+def print_timing_statistics(statistics):
+    print("\nTiming statistics (so far):")
+    print("=================================")
+    print(f"After {len(statistics['loop'])} frames processed in {np.sum(statistics['loop']):.4f} seconds")
+    for key, value in statistics.items():
+        if len(value) == 0:
+            continue
+        print(f"\n{key}: {np.mean(value):.4f} ± {np.std(value):.4f} seconds")
+        print(f"Max {key}: {np.max(value):.4f} seconds")
+        print(f"Min {key}: {np.min(value):.4f} seconds")
 
 # Disable torch gradient computation
 torch.set_grad_enabled(False)
@@ -498,7 +515,20 @@ def main(cfg : DictConfig):
     # query_service_node._attach_model(clip_model)
     # query_service_node._attach_tokenizer(clip_tokenizer)
     # query_service_node._attach_objects(objects)
+
+    timing_statistics = {}
+    timing_statistics["loop"] = []
+    timing_statistics["detection"] = []
+    timing_statistics["merging"] = []
+    timing_statistics["filtering"] = []
+    timing_statistics["yolo"] = []
+    timing_statistics["sam"] = []
+    timing_statistics["clip"] = []
+    timing_statistics["denoising"] = []
+
     while rclpy.ok():
+        loop_start_time = time.time()
+
         frame_idx += 1
         # if counter + 1 in skipped_frames:
         #     print(f"Skipping frame {frame_idx} as it is blurry")
@@ -597,13 +627,19 @@ def main(cfg : DictConfig):
         # vis_save_path_for_vlm_edges = get_vlm_annotated_image_path(det_exp_vis_path, color_path, w_edges=True)
         
         if run_detections:
+            detection_start_time = time.time()
+
             results = None
             # opencv can't read Path objects...
             image = cv2.imread(str(color_path)) # This will in BGR color space
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
             # Do initial object detection
+            yolo_start_time = time.time()
             results = detection_model.predict(color_path, conf=0.1, verbose=False)
+            yolo_end_time = time.time()
+            timing_statistics["yolo"].append(yolo_end_time - yolo_start_time)
+
             confidences = results[0].boxes.conf.cpu().numpy()
             detection_class_ids = results[0].boxes.cls.cpu().numpy().astype(int)
             detection_class_labels = [f"{obj_classes.get_classes_arr()[class_id]} {class_idx}" for class_idx, class_id in enumerate(detection_class_ids)]
@@ -614,7 +650,10 @@ def main(cfg : DictConfig):
             # Get Masks Using SAM or MobileSAM
             # UltraLytics SAM
             if xyxy_tensor.numel() != 0:
+                sam_start_time = time.time()
                 sam_out = sam_predictor.predict(color_path, bboxes=xyxy_tensor, verbose=False)
+                sam_end_time = time.time()
+                timing_statistics["sam"].append(sam_end_time - sam_start_time)
                 masks_tensor = sam_out[0].masks.data
 
                 masks_np = masks_tensor.cpu().numpy()
@@ -644,8 +683,11 @@ def main(cfg : DictConfig):
             # print("")
             # pdb.set_trace()
 
+            clip_start_time = time.time()
             image_crops, image_feats, text_feats = compute_clip_features_batched(
                 image_rgb, curr_det, clip_model, clip_preprocess, clip_tokenizer, obj_classes.get_classes_arr(), cfg.device)
+            clip_end_time = time.time()
+            timing_statistics["clip"].append(clip_end_time - clip_start_time)
 
             # increment total object detections
             tracker.increment_total_detections(len(curr_det.xyxy))
@@ -670,6 +712,9 @@ def main(cfg : DictConfig):
             }
 
             raw_gobs = results
+
+            detection_end_time = time.time()
+            timing_statistics["detection"].append(detection_end_time - detection_start_time)
 
             # save the detections if needed
             if cfg.save_detections:
@@ -733,7 +778,7 @@ def main(cfg : DictConfig):
 
         if len(gobs['mask']) == 0: # no detections in this frame
             continue
-
+        
         # this helps make sure things like pillows on couches are separate objects
         gobs['mask'] = mask_subtract_contained(gobs['xyxy'], gobs['mask'])
 
@@ -785,6 +830,7 @@ def main(cfg : DictConfig):
 
         # pdb.set_trace()
 
+        merge_start_time = time.time()
         ### compute similarities and then merge
         spatial_sim = compute_spatial_similarities(
             spatial_sim_type=cfg['spatial_sim_type'], 
@@ -823,6 +869,8 @@ def main(cfg : DictConfig):
         )
         map_edges = process_edges(match_indices, gobs, len(objects), objects, map_edges)
 
+        merge_end_time = time.time()
+
         is_final_frame = False #frame_idx == len(dataset) - 1
         if is_final_frame:
             print("Final frame detected. Performing final post-processing...")
@@ -836,6 +884,7 @@ def main(cfg : DictConfig):
             frame_idx,
             is_final_frame,
         ):
+            denoising_start_time = time.time()
             objects = measure_time(denoise_objects)(
                 downsample_voxel_size=cfg['downsample_voxel_size'], 
                 dbscan_remove_noise=cfg['dbscan_remove_noise'], 
@@ -845,6 +894,8 @@ def main(cfg : DictConfig):
                 device=cfg['device'], 
                 objects=objects
             )
+            denoising_end_time = time.time()
+            timing_statistics["denoising"].append(denoising_end_time - denoising_start_time)
 
         # Filtering
         if processing_needed(
@@ -853,12 +904,15 @@ def main(cfg : DictConfig):
             frame_idx,
             is_final_frame,
         ):
+            filtering_start_time = time.time()
             objects = filter_objects(
                 obj_min_points=cfg['obj_min_points'], 
                 obj_min_detections=cfg['obj_min_detections'], 
                 objects=objects,
                 map_edges=map_edges
             )
+            filtering_end_time = time.time()
+            timing_statistics["filtering"].append(filtering_end_time - filtering_start_time)
 
         # Merging
         if processing_needed(
@@ -867,6 +921,7 @@ def main(cfg : DictConfig):
             frame_idx,
             is_final_frame,
         ):
+            merge_start_time = time.time()
             objects, map_edges = measure_time(merge_objects)(
                 merge_overlap_thresh=cfg["merge_overlap_thresh"],
                 merge_visual_sim_thresh=cfg["merge_visual_sim_thresh"],
@@ -881,6 +936,9 @@ def main(cfg : DictConfig):
                 do_edges=cfg["make_edges"],
                 map_edges=map_edges
             )
+            merge_end_time = time.time()
+            timing_statistics["merging"].append(merge_end_time - merge_start_time)
+
         orr_log_objs_pcd_and_bbox(objects, obj_classes)
         orr_log_edges(objects, map_edges, obj_classes)
 
@@ -947,6 +1005,12 @@ def main(cfg : DictConfig):
                 "exit_early_flag": exit_early_flag,
                 "is_final_frame": is_final_frame,
                 })
+        
+        loop_end_time = time.time()
+        loop_time = loop_end_time - loop_start_time
+        timing_statistics["loop"].append(loop_time)
+
+        print_timing_statistics(timing_statistics)
     # LOOP OVER -----------------------------------------------------
     
     handle_rerun_saving(cfg.use_rerun, cfg.save_rerun, cfg.exp_suffix, exp_out_path)

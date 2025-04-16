@@ -1394,7 +1394,7 @@ def process_edges(match_indices, gobs, initial_objects_count, objects, map_edges
 
         curr_edges_3d_by_index.append((obj1_objects_index, relation, obj2_objects_index))
 
-    print(f"Line 624, curr_edges_3d_by_index: {curr_edges_3d_by_index}")
+    # print(f"Line 624, curr_edges_3d_by_index: {curr_edges_3d_by_index}")
     
     # Add the new edges to the map
     for (obj_1_idx, rel_type, obj_2_idx) in curr_edges_3d_by_index:
