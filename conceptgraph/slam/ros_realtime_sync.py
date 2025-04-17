@@ -991,7 +991,7 @@ def main(cfg : DictConfig):
             obj['pcd'] = reduced_pcd
             obj["n_points"] = len(reduced_pcd.points)
 
-        if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_nterval == 0):
+        if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_interval == 0):
             # save the pointcloud
             save_pointcloud(
                 exp_suffix=cfg.exp_suffix,
