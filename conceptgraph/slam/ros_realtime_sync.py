@@ -331,8 +331,10 @@ class Subscriber(Node):
         K = scale_intrinsics(K, height_downsample_ratio, width_downsample_ratio)
         # Rotate if necessary
         if self.cfg.rotate_image:
-            K[0, 2], K[1, 2] = K[1, 2], K[0, 2] # switch cx, cy
-            K[0, 0], K[1, 1] = K[1, 1], K[0, 0] # switch fx, fy
+            K_tmp = K.clone()
+            K[0, 2], K[1, 2] = K_tmp[1, 2], K_tmp[0, 2] # switch cx, cy
+            K[0, 0], K[1, 1] = K_tmp[1, 1], K_tmp[0, 0] # switch fx, fy
+        
         # Convert to torch tensor (not sure why we do this but its in the original dataset loader)
         intrinsics = torch.eye(4).to(K)
         intrinsics[:3, :3] = K
@@ -990,7 +992,7 @@ def main(cfg : DictConfig):
             obj['pcd'] = reduced_pcd
             obj["n_points"] = len(reduced_pcd.points)
 
-        if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_interval == 0):
+        if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_nterval == 0):
             # save the pointcloud
             save_pointcloud(
                 exp_suffix=cfg.exp_suffix,
