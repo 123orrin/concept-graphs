@@ -975,10 +975,9 @@ def main(cfg : DictConfig):
             heatmap = get_object_heatmap(node.map, node.map_info, query_clip_feature, objects)
 
             f = plt.figure(1)
-            # plt.imshow(node.map, cmap='gray', alpha=0.5)
-            print(f"updating, {node.map.shape}")
             plt.clf()
-            plt.imshow(np.flip(heatmap, axis=0), cmap='hot')
+            plt.imshow(np.flip(node.map, axis=0), cmap='gray', alpha=0.5)
+            plt.imshow(np.flip(heatmap, axis=0), cmap='hot', alpha=0.75)
             plt.xlim((0, node.map.shape[1]))
             plt.ylim((0, node.map.shape[0]))
             plt.title(f"Heatmap for query: {query_input}")
