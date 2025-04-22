@@ -98,6 +98,7 @@ from conceptgraph.occupancygrid.utils import add_objects_to_occupancy_grid, dila
 from conceptgraph.occupancygrid.heatmap import get_object_heatmap
 from conceptgraph.llms.llama_client import LlamaClient
 from conceptgraph.llms.prompts import POCD_SYSTEM_PROMPT, HEATMAP_SYSTEM_PROMPT
+from conceptgraph.utils.query_service_provider import QueryServiceProvider
 
 import rclpy
 from rclpy.node import Node
@@ -459,10 +460,13 @@ def main(cfg : DictConfig):
 
     node = Subscriber(cfg=cfg)
     query_clip_feature = None
+    query_node = QueryServiceProvider(model = clip_model, tokenizer = clip_tokenizer)
+    query_node.attach_objects(objects)
     while rclpy.ok():
         
         while not node.ready_to_process:
             rclpy.spin_once(node, timeout_sec=0)
+            rclpy.spin_once(query_node, timeout_sec=0)
         node.ready_to_process = False
 
         local_time = time.time()
