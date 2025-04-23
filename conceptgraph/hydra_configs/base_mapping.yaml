@@ -3,7 +3,7 @@ defaults:
 
 make_edges: !!bool False
 
-map_with_button: True # Only map when a specific button on the gamepad is pressed
+map_with_button: False # Only map when a specific button on the gamepad is pressed
 
 rotate_image: !!bool True
 use_pc_for_depth: !!bool False # Use the published point cloud for depth instead of the depth image

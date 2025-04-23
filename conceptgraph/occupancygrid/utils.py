@@ -64,12 +64,10 @@ def convert_world_to_cell(world: tuple, occupancy_info: dict) -> tuple:
     assert 0 <= y < occupancy_info['height'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. y: %d, height: %d" % (y, occupancy_info['height'])
     return (y, x)
 
-def show_occupancy_grid(occupancy_grid: np.ndarray, cmap='viridis'):
+def show_occupancy_grid(grid: np.ndarray, cmap='viridis'):
     """
     Display the occupancy grid.
     """
-    grid = deepcopy(occupancy_grid)
-    grid = np.flip(grid, axis=0)
 
     # print("OCCUPIED")
     # print(np.sum(grid == OccupancyGridValue.OCCUPIED.value))
@@ -78,6 +76,7 @@ def show_occupancy_grid(occupancy_grid: np.ndarray, cmap='viridis'):
     # print("UNKNOWN")
     # print(np.sum(grid == OccupancyGridValue.UNKNOWN.value))
     plt.imshow(grid, cmap=cmap)
+    plt.gca().yaxis.set_inverted(False)
     plt.show()
 
 def dilate_map(occupancy_grid: np.ndarray, occupancy_info: dict, dilatation_amount_metres: float) -> np.ndarray:

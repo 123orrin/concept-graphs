@@ -5,8 +5,6 @@ The script is used to model Grounded SAM detections in 3D, it assumes the tag2te
 # Standard library imports
 import os
 from pathlib import Path
-import pickle
-import gzip
 from termcolor import colored
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -19,7 +17,6 @@ import torch
 from PIL import Image
 from omegaconf import DictConfig
 import hydra
-from omegaconf import DictConfig
 import open_clip
 from ultralytics import YOLO, SAM
 import supervision as sv
@@ -150,6 +147,7 @@ class Subscriber(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.sub_map = self.create_subscription(OccupancyGrid, 'map', self._map_callback, 1)
+        self.pub_map = self.create_publisher(OccupancyGrid, 'map/conceptgraph', 1)
 
         self.ready_to_process = False
         self.map_with_button = cfg.map_with_button
@@ -163,6 +161,8 @@ class Subscriber(Node):
         self.changes = np.array([])
         self.map = None
         self.map_info = None
+
+        self.objects = None
 
     def callback_sync(self, info_msg, color_msg, depth_msg):
         self.ready_to_process = False
@@ -191,6 +191,15 @@ class Subscriber(Node):
         self.map_info["width"] = msg.info.width
         self.map_info["height"] = msg.info.height
         self.map = np.array(msg.data).reshape(msg.info.height, msg.info.width)
+
+        if self.objects is None:
+            return
+        grid = add_objects_to_occupancy_grid(self.map, self.map_info, self.objects, max_height=3)
+        new_msg = OccupancyGrid()
+        new_msg.header = msg.header
+        new_msg.info = msg.info
+        new_msg.data = grid.flatten().tolist()
+        self.pub_map.publish(new_msg)        
 
     def _process_inputs(self, info_msg, color_msg, depth_msg):
         # Process all inputs
@@ -943,23 +952,24 @@ def main(cfg : DictConfig):
                 color_path
             )
         
-        plt.figure(0)
-        plt.clf()
-        data = []
-        for obj in objects:
-            first_idx = obj['image_idx'][0]
-            history = [None] * first_idx + obj['confidence_history']
-            data.append([history, obj['class_name'], obj['curr_obj_num'], first_idx])
-        legend = []
-        for d in data:
-            plt.plot(d[0])
-            legend.append(d[1])
-        plt.legend(legend)
-        plt.ylim([0, 1])
-        plt.xlim(left=0)
-        plt.xlabel('Frame Index')
-        plt.ylabel('POCD Confidence')
-        plt.title('POCD Confidence Over Time')
+        if cfg.pocd_plot:
+            plt.figure(0)
+            plt.clf()
+            data = []
+            for obj in objects:
+                first_idx = obj['image_idx'][0]
+                history = [None] * first_idx + obj['confidence_history']
+                data.append([history, obj['class_name'], obj['curr_obj_num'], first_idx])
+            legend = []
+            for d in data:
+                plt.plot(d[0])
+                legend.append(d[1])
+            plt.legend(legend)
+            plt.ylim([0, 1])
+            plt.xlim(left=0)
+            plt.xlabel('Frame Index')
+            plt.ylabel('POCD Confidence')
+            plt.title('POCD Confidence Over Time')
 
         if node.query_heatmap:
             node.query_heatmap = False
@@ -994,6 +1004,8 @@ def main(cfg : DictConfig):
             reduced_pcd = obj["pcd"].voxel_down_sample(cfg["downsample_voxel_size"])
             obj['pcd'] = reduced_pcd
             obj["n_points"] = len(reduced_pcd.points)
+
+        node.objects = objects
 
         if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_interval == 0):
             # save the pointcloud
