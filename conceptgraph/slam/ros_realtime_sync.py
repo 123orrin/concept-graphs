@@ -121,21 +121,22 @@ class Subscriber(Node):
         super().__init__('subscriber')
         self.cfg = cfg
 
-        self.sub_info = MF_Subscriber(self, CameraInfo, 'camera/color/camera_info')
-        self.sub_color = MF_Subscriber(self, ROSImage, 'camera/color/image_raw')
-        # self.sub_info = MF_Subscriber(self, CameraInfo, 'spectacular_ai/camera_info')
-        # self.sub_color = MF_Subscriber(self, ROSImage, 'spectacular_ai/color_image')
+        self.use_SAI = True
 
         self.sub_joy = self.create_subscription(Joy, 'gamepad_joy', self._joy_callback, 1)
 
-        if cfg.use_pc_for_depth:
-            self.sub_depth = MF_Subscriber(self, PointCloud2, 'camera/depth/points')
-            # self.sub_depth = MF_Subscriber(self, PointCloud2, 'spectacular_ai/point_cloud/local')
-        else:
-            self.sub_depth = MF_Subscriber(self, ROSImage, 'camera/depth/image_raw')
-            # self.sub_depth = MF_Subscriber(self, ROSImage, 'spectacular_ai/depth_image')
-        
+        topic_camera_info = 'spectacular_ai/camera_info' if self.use_SAI else 'camera/color/camera_info'
+        self.sub_info = MF_Subscriber(self, CameraInfo, topic_camera_info)
+        topic_color = 'spectacular_ai/color_image' if self.use_SAI else 'camera/color/image_raw'
+        self.sub_color = MF_Subscriber(self, ROSImage, topic_color)
 
+        if cfg.use_pc_for_depth:
+            topic_depth = 'spectacular_ai/point_cloud/local' if self.use_SAI else 'camera/depth/points'
+            self.sub_depth = MF_Subscriber(self, PointCloud2, topic_depth)
+        else:
+            topic_depth = 'spectacular_ai/depth_image' if self.use_SAI else 'camera/depth/image_raw'
+            self.sub_depth = MF_Subscriber(self, ROSImage, topic_depth)
+        
         self.MAX_MESSAGE_DELAY = 1/30
         self.callback_synchronizer = ApproximateTimeSynchronizer([self.sub_info, self.sub_color, self.sub_depth], 1, self.MAX_MESSAGE_DELAY)
         self.callback_synchronizer.registerCallback(self.callback_sync)
@@ -151,7 +152,7 @@ class Subscriber(Node):
 
         self.ready_to_process = False
         self.map_with_button = cfg.map_with_button
-        self.should_map = False
+        self.should_map = True
         self.query_heatmap = False
 
         self.info = None
