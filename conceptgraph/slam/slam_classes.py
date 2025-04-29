@@ -239,10 +239,14 @@ class ProbabilisticMapObjectList(MapObjectList):
             change: some measure of change between the observation and previous knowledge
             std_change: the standard deviation of the change
         '''
-        idx = 0
+        if ids is None:
+            return
+
         for obj in self:
-            if (ids is not None) and (obj['id'] not in ids):
+            if obj['id'] not in ids:
                 continue
+            
+            idx = ids.index(obj['id'])
 
             mu = obj['mu']
             sig = obj['sig']
@@ -317,8 +321,6 @@ class ProbabilisticMapObjectList(MapObjectList):
 
             confidence = a / (a + b)
             obj['pocd_confidence'] = confidence
-            
-            idx += 1
         
     def updateKSingle(self, obj, k):
         '''
@@ -547,11 +549,12 @@ class ProbabilisticMapObjectList(MapObjectList):
         transforms = []
         for missing_object_ind in inds:
             potential_match_inds = []
+            dissapeared_time = self[missing_object_ind]['time_of_disappearance']
+
             for i, obj in enumerate(self):
                 if i == missing_object_ind:
                     continue
                 # Check if an object was instatiated near the time the object dissapeared
-                dissapeared_time = self[missing_object_ind]['time_of_disappearance']
                 instatiated_time = obj['first_observed_time']
                 if instatiated_time < dissapeared_time - look_back_time:
                     # The object was instatiated too long ago
@@ -618,9 +621,9 @@ class ProbabilisticMapObjectList(MapObjectList):
         transforms = []
         for missing_object in removed_object_list:
             potential_match_inds = []
+            dissapeared_time = missing_object['time_of_disappearance']
             for i, obj in enumerate(self):
                 # Check if an object was instatiated near the time the object dissapeared
-                dissapeared_time = missing_object['time_of_disappearance']
                 instatiated_time = obj['first_observed_time']
                 if instatiated_time < dissapeared_time - look_back_time:
                     # The object was instatiated too long ago
