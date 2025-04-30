@@ -44,14 +44,6 @@ def add_objects_to_occupancy_grid(occupancy_grid: np.ndarray, occupancy_info: di
 
     return grid
 
-def convert_cell_to_world(cell: tuple, occupancy_info: dict) -> tuple:
-    """
-    Convert a cell to world coordinates.
-    """
-    resolution = occupancy_info['resolution']
-    origin = occupancy_info['origin']
-    return (cell[1] * resolution + origin[1], cell[0] * resolution + origin[0])
-
 def convert_world_to_cell(world: tuple, occupancy_info: dict) -> tuple:
     """
     Convert world coordinates to a cell.
@@ -63,6 +55,18 @@ def convert_world_to_cell(world: tuple, occupancy_info: dict) -> tuple:
     assert 0 <= x < occupancy_info['width'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. x: %d, width: %d" % (x, occupancy_info['width'])
     assert 0 <= y < occupancy_info['height'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. y: %d, height: %d" % (y, occupancy_info['height'])
     return (y, x)
+
+def world_to_cell(world_xy : np.ndarray, occupancy_origin_xy: tuple, occupancy_resolution: float) -> np.ndarray:
+    """
+    Convert world coordinates to cell coordinates.
+    """
+    if len(world_xy.shape) == 1:
+        world_xy = world_xy.reshape(1, -1)
+    elif not (len(world_xy.shape) == 2 and world_xy.shape[1] == 2):
+        raise ValueError("world_xy must be a 2D array with shape (N, 2) or a 1D array with shape (2,)")
+    offset_xy = world_xy - np.reshape(occupancy_origin_xy, (1, 2))
+    offset_xy = np.floor(offset_xy / occupancy_resolution).astype(np.int32)
+    return offset_xy
 
 def show_occupancy_grid(grid: np.ndarray, cmap='viridis'):
     """

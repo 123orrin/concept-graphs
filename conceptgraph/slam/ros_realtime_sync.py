@@ -92,10 +92,11 @@ from conceptgraph.utils.model_utils import compute_clip_features_batched
 from conceptgraph.utils.general_utils import get_vis_out_path, cfg_to_dict, check_run_detections
 from conceptgraph.dataset.conceptgraphs_datautils import scale_intrinsics
 from conceptgraph.occupancygrid.utils import add_objects_to_occupancy_grid, dilate_map, show_occupancy_grid
-from conceptgraph.occupancygrid.heatmap import get_object_heatmap
 from conceptgraph.llms.llama_client import LlamaClient
 from conceptgraph.llms.prompts import POCD_SYSTEM_PROMPT, HEATMAP_SYSTEM_PROMPT
 from conceptgraph.utils.query_service_provider import QueryServiceProvider
+from conceptgraph.utils.heatmap_publisher import HeatmapProvider
+
 
 
 from ultralytics.engine.model import Model
@@ -156,7 +157,6 @@ class Subscriber(Node):
         self.ready_info_color_depth_ = False
         self.map_with_button = cfg.map_with_button
         self.should_map = True
-        self.query_heatmap = False
 
         self.info = None
         self.color = None
@@ -194,9 +194,6 @@ class Subscriber(Node):
 
     def _joy_callback(self, msg):
         self.should_map = msg.axes[-1] == 1
-        if not self.query_heatmap and bool(msg.buttons[3]):
-            self.query_heatmap = True
-            print("Toggled heatmap query")
 
     def _map_callback(self, msg):
         self.map_info = dict()
@@ -543,14 +540,24 @@ def main(cfg : DictConfig):
     frame_idx = -1
 
     node = Subscriber(cfg=cfg)
-    query_clip_feature = None
     query_node = QueryServiceProvider(model = clip_model, tokenizer = clip_tokenizer)
     query_node.attach_objects(objects)
+    heatmap_publisher = HeatmapProvider(
+        clip_model=clip_model,
+        clip_tokenizer=clip_tokenizer,
+        object_list=objects,
+        missing_object_list=objects_missing
+    )
+
     while rclpy.ok():
-        
+        # update reference of objects (filter method below creates a new object sometimes, TODO change this) 
+        heatmap_publisher.object_list = objects
+        heatmap_publisher.missing_object_list = objects_missing
+
         while not node.is_ready():
             rclpy.spin_once(node, timeout_sec=0)
             rclpy.spin_once(query_node, timeout_sec=0)
+            rclpy.spin_once(heatmap_publisher, timeout_sec=0)
         node.reset_ready()
 
         local_time = time.time()
@@ -794,7 +801,6 @@ def main(cfg : DictConfig):
                 # Removed objects are now "missing"
                 objects_missing += [objects[i] for i in to_remove]
 
-
                 # Translate expected objects based on POCD.
                 # When an expected object has low enough pocd score, consider that it might moved farther
                 # Compare each of these objects to all objects which appeared at a similar time as this object disappeared
@@ -812,7 +818,7 @@ def main(cfg : DictConfig):
                 to_remove = [i for i in list(to_remove) if i is not None]
                 to_remove.sort(reverse=True)
                 for ind in to_remove:
-                    #objects_missing.append(objects[ind]) # why are objects which were merged added here?
+                    # objects_missing.append(objects[ind]) # why are objects which were merged added here?
                     objects.pop(ind)
                     locations_in_list = []
 
@@ -861,7 +867,6 @@ def main(cfg : DictConfig):
                     objects_missing.pop(i)
 
         ##### End POCD Update
-
 
         # Now merge the detected objects into the existing objects based on the match indices
         objects = merge_obj_matches(
@@ -969,32 +974,6 @@ def main(cfg : DictConfig):
             plt.xlabel('Frame Index')
             plt.ylabel('POCD Confidence')
             plt.title('POCD Confidence Over Time')
-
-        if node.query_heatmap:
-            node.query_heatmap = False
-            query_input = input("Enter your query for the heatmap: ").strip()
-            if query_input:
-                print(f"Enabled heatmap generation for '{query_input}'")
-                text_queries = [query_input]
-                text_queries_tokenized = clip_tokenizer(text_queries).to("cuda")
-                query_clip_feature = clip_model.encode_text(text_queries_tokenized)
-                # query_clip_feature = query_clip_feature / query_clip_feature.norm(dim=-1, keepdim=True)
-                # query_clip_feature = query_clip_feature.squeeze()
-            else:
-                print("Disabled heatmap generation!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                query_clip_feature = None
-            
-        if query_clip_feature is not None:
-            heatmap = get_object_heatmap(node.map, node.map_info, query_clip_feature, objects)
-
-            f = plt.figure(1)
-            plt.clf()
-            plt.imshow(np.flip(node.map, axis=0), cmap='gray', alpha=0.5)
-            plt.imshow(np.flip(heatmap, axis=0), cmap='hot', alpha=0.75)
-            plt.xlim((0, node.map.shape[1]))
-            plt.ylim((0, node.map.shape[0]))
-            plt.title(f"Heatmap for query: {query_input}")
-            f.canvas.draw()
 
         plt.pause(0.1)
 
