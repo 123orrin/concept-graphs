@@ -61,3 +61,6 @@ merge_interval: 10             # Merge objects based on geometric and semantic s
 run_denoise_final_frame: !!bool True
 run_filter_final_frame: !!bool True
 run_merge_final_frame: !!bool True
+
+detection_model: yolov8l-world # "yolov8l-world", "yolov8l-worldv2"
+sam_predictor_model: sam2_b # "sam_l", "mobile_sam" (UltraLytics SAM), "sam2_b" (UltraLytics SAM 2 base), "sam2_t" (UltraLytics SAM 2 tiny)

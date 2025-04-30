@@ -501,13 +501,8 @@ def main(cfg : DictConfig):
         det_exp_path.mkdir(parents=True, exist_ok=True)
 
         ## Initialize the detection models
-        detection_model = measure_time(YOLO)('yolov8l-world.pt')
-        # detection_model = measure_time(YOLO)('yolov8l-worldv2.pt')
-        # sam_predictor = SAM('sam_l.pt') 
-        # sam_predictor = SAM('mobile_sam.pt') # UltraLytics SAM
-        # sam_predictor = measure_time(get_sam_predictor)(cfg) # Normal SAM
-        sam_predictor = SAM('sam2_b.pt')  # UltraLytics SAM 2 base
-        # sam_predictor = SAM('sam2_t.pt')  # UltraLytics SAM 2 tiny
+        detection_model = measure_time(YOLO)(cfg.detection_model + '.pt')
+        sam_predictor = SAM(cfg.sam_predictor_model + '.pt')
         clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
             "ViT-H-14", "laion2b_s32b_b79k"
         )
@@ -561,7 +556,7 @@ def main(cfg : DictConfig):
         local_time = time.time()
         frame_idx += 1
         tracker.curr_frame_idx = frame_idx
-        counter+=1
+        counter += 1
         orr.set_time_sequence("frame", frame_idx)
 
         color_tensor, depth_tensor, intrinsics, pose_tensor = node.color, node.depth, node.info, node.pose
@@ -633,10 +628,9 @@ def main(cfg : DictConfig):
         # orr_log_vlm_image(vis_save_path_for_vlm)
         # orr_log_vlm_image(vis_save_path_for_vlm_edges, label="w_edges")
 
-        # resize the observation if needed
+        # resize and filter the observation if needed
         resized_gobs = resize_gobs(raw_gobs, image_rgb)
-        # filter the observations
-        filtered_gobs = filter_gobs(resized_gobs, image_rgb, 
+        gobs = filter_gobs(resized_gobs, image_rgb, 
             skip_bg=cfg.skip_bg,
             BG_CLASSES=obj_classes.get_bg_classes_arr(),
             mask_area_threshold=cfg.mask_area_threshold,
@@ -644,9 +638,8 @@ def main(cfg : DictConfig):
             mask_conf_threshold=cfg.mask_conf_threshold,
         )
 
-        gobs = filtered_gobs
-
-        if len(gobs['mask']) == 0: # no detections in this frame
+        # no detections in this frame
+        if len(gobs['mask']) == 0:
             continue
 
         # this helps make sure things like pillows on couches are separate objects
@@ -738,7 +731,8 @@ def main(cfg : DictConfig):
 
         visual_sim = compute_visual_similarities(detection_list, objects)
 
-        match_indices = match_detections_to_objects(
+        # maps each detection to one object (list containing the index of the matched object)
+        match_obj_indices = match_detections_to_objects(
             match_method=cfg['match_method'],
             phys_bias=cfg['phys_bias'],
             spatial_sim=spatial_sim,
@@ -775,34 +769,42 @@ def main(cfg : DictConfig):
                     pocd_type_cache[c] = object_type
             
             if expected_inds:
-                # Get Object Changes
+
+                # get change for each expected object
                 change_list, std_change_list, obj_transformations = objects.getChangesForExpectedObjects(detection_list=detection_list, 
                                                                                                          expected_object_indices=expected_inds, 
-                                                                                                         match_indices=match_indices, 
+                                                                                                         match_indices=match_obj_indices, 
                                                                                                          default_change=cfg.pocd_default_change, 
                                                                                                          default_change_std=cfg.pocd_default_change_std)
-                for i, index in enumerate(expected_inds):
-                    if change_list[i] == cfg.pocd_default_change:
+                
+                # set expected objects with no found match as disappeared
+                for index, change in zip(expected_inds, change_list):
+                    if change == cfg.pocd_default_change:
                         # objects[index]['type'] = POCDObjectTypes.DISSAPEARED
                         objects[index]['time_of_disappearance'] = local_time
 
-                # Update POCD probabilities
+                # Update POCD probabilities of expected objects
                 objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
                 
-                # Remove objects based on POCD
+                # Remove expected objects based on POCD
                 to_remove = set()
                 pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
                 to_remove.update(pruned_object_inds)
 
-                # Translate objects based on POCD
+                # Removed objects are now "missing"
+                objects_missing += [objects[i] for i in to_remove]
+
+
+                # Translate expected objects based on POCD.
+                # When an expected object has low enough pocd score, consider that it might moved farther
+                # Compare each of these objects to all objects which appeared at a similar time as this object disappeared
                 pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold, cfg.pocd_removal_threshold)
                 
                 # Transform to a detection, if detected
                 # objects.transformObjectsToDetection(expected_object_indices=expected_inds, transform_list=obj_transformations, inds=pruned_object_inds)
                 # Transform to similar objects in library
-                pruned_object_inds = [i for i in pruned_object_inds if i not in match_indices]
+                pruned_object_inds = [i for i in pruned_object_inds if i not in match_obj_indices]
                 dissapeared_match_indices, transform_list = objects.matchDissapearedObjectsToRecentObjects(cfg.look_back_time, cfg.look_forward_time, pruned_object_inds)
-                # objects.transformObjectsToRecentObjects(transform_list, dissapeared_match_indices)
                 objects.mergeObjectsWithRecentObjects(pruned_object_inds, dissapeared_match_indices)
                 to_remove.update(dissapeared_match_indices)
 
@@ -810,35 +812,40 @@ def main(cfg : DictConfig):
                 to_remove = [i for i in list(to_remove) if i is not None]
                 to_remove.sort(reverse=True)
                 for ind in to_remove:
-                    objects_missing.append(objects[ind])
+                    #objects_missing.append(objects[ind]) # why are objects which were merged added here?
                     objects.pop(ind)
                     locations_in_list = []
-                    for i, match_ind in enumerate(match_indices):
+
+                    # update match_obj_indices accordingly
+                    for i, match_ind in enumerate(match_obj_indices):
                         if match_ind is None:
                             continue
-                        if match_ind == ind:
+                        elif match_ind == ind:
+                            # a detection was matched to this object (which is now being removed)
                             locations_in_list.append(i)
-                        if match_ind > ind:
-                            match_indices[i] -= 1
+                        elif match_ind > ind:
+                            match_obj_indices[i] -= 1
+                    
+                    # delete the entries of this object in match_obj_indices and the corresponding detections
                     locations_in_list = locations_in_list[::-1]
                     for i in locations_in_list:
-                        match_indices.pop(i)
+                        match_obj_indices.pop(i)
                         detection_list.pop(i)
 
                 # Reject detections that are outliers
                 ### TODO: Outlier detection doesn't work (no outliers detected). Fix it or get rid of it.
-                pruned_detection_inds = []
-                for i, ind in enumerate(match_indices):
-                    if ind is None:
-                        continue
-                    if objects[ind]['inlier']:
-                        continue
-                    print(colored(f"Rejecting detection {detection_list[i]['class_name']} as an outlier\n" * 10, 'magenta'))
-                    pruned_detection_inds.append(i)
-                pruned_detection_inds.sort(reverse=True)
-                for i in pruned_detection_inds:
-                    detection_list.pop(i)
-                    match_indices.pop(i)
+                # pruned_detection_inds = []
+                # for i, ind in enumerate(match_obj_indices):
+                #     if ind is None:
+                #         continue
+                #     if objects[ind]['inlier']:
+                #         continue
+                #     print(colored(f"Rejecting detection {detection_list[i]['class_name']} as an outlier\n" * 10, 'magenta'))
+                #     pruned_detection_inds.append(i)
+                # pruned_detection_inds.sort(reverse=True)
+                # for i in pruned_detection_inds:
+                #     detection_list.pop(i)
+                #     match_obj_indices.pop(i)
 
                 # Add back in objects bsed on POCD
                 removed_matches, transforms = objects.matchRemovedObjectsToRecentObjects(objects_missing, cfg.look_back_time, cfg.look_forward_time)
@@ -860,7 +867,7 @@ def main(cfg : DictConfig):
         objects = merge_obj_matches(
             detection_list=detection_list, 
             objects=objects, 
-            match_indices=match_indices,
+            match_indices=match_obj_indices,
             downsample_voxel_size=cfg['downsample_voxel_size'], 
             dbscan_remove_noise=cfg['dbscan_remove_noise'], 
             dbscan_eps=cfg['dbscan_eps'], 
@@ -951,11 +958,11 @@ def main(cfg : DictConfig):
             for obj in objects:
                 first_idx = obj['image_idx'][0]
                 history = [None] * first_idx + obj['confidence_history']
-                data.append([history, obj['class_name'], obj['curr_obj_num'], first_idx])
+                data.append([history, obj['class_name'], obj['id'], obj['curr_obj_num'], first_idx])
             legend = []
             for d in data:
                 plt.plot(d[0])
-                legend.append(d[1])
+                legend.append(d[1] + str(d[2]))
             plt.legend(legend)
             plt.ylim([0, 1])
             plt.xlim(left=0)
