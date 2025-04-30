@@ -97,6 +97,8 @@ from conceptgraph.llms.llama_client import LlamaClient
 from conceptgraph.llms.prompts import POCD_SYSTEM_PROMPT, HEATMAP_SYSTEM_PROMPT
 from conceptgraph.utils.query_service_provider import QueryServiceProvider
 
+
+from ultralytics.engine.model import Model
 import rclpy
 from rclpy.node import Node
 import rclpy.time
@@ -383,6 +385,73 @@ class Subscriber(Node):
             return None
         
 
+def detect_objects(image_rgb: np.ndarray, frame_idx: int, detection_model: Model, sam_predictor: Model, cfg: DictConfig, obj_classes: ObjectClasses, clip_model, clip_preprocess, clip_tokenizer, tracker):
+    results = None
+
+    # opencv can't read Path objects...
+    blur_score = cv2.Laplacian(image_rgb, cv2.CV_64F).var()
+    if blur_score < cfg.blur_threshold:
+        print(colored(f"Frame {frame_idx} is too blurry, skipping...\n" * 10, 'red'))
+        return None
+    
+    # Convert the numpy array to a PIL Image
+    image_pil = Image.fromarray(image_rgb)
+
+    # Do initial object detection
+    results = detection_model.predict(image_pil, conf=0.1, verbose=False)
+    confidences = results[0].boxes.conf.cpu().numpy()
+    detection_class_ids = results[0].boxes.cls.cpu().numpy().astype(int)
+    detection_class_labels = [f"{obj_classes.get_classes_arr()[class_id]} {class_idx}" for class_idx, class_id in enumerate(detection_class_ids)]
+    xyxy_tensor = results[0].boxes.xyxy
+    xyxy_np = xyxy_tensor.cpu().numpy()
+
+    # if there are detections,
+    # Get Masks Using SAM or MobileSAM
+    # UltraLytics SAM
+    if xyxy_tensor.numel() != 0:
+        sam_out = sam_predictor.predict(image_pil, bboxes=xyxy_tensor, verbose=False)
+        masks_tensor = sam_out[0].masks.data
+
+        masks_np = masks_tensor.cpu().numpy()
+    else:
+        masks_np = np.empty((0, *image_rgb.shape[:2]), dtype=np.float64)
+
+    # Create a detections object that we will save later
+    curr_det = sv.Detections(
+        xyxy=xyxy_np,
+        confidence=confidences,
+        class_id=detection_class_ids,
+        mask=masks_np,
+    )
+    if curr_det.xyxy.size == 0:
+        print(f"No detections found for frame {frame_idx}")
+        return None
+
+    image_crops, image_feats_gpu, text_feats = compute_clip_features_batched(
+        image_rgb, curr_det, clip_model, clip_preprocess, clip_tokenizer, obj_classes.get_classes_arr(), cfg.device)
+
+    # increment total object detections
+    tracker.increment_total_detections(len(curr_det.xyxy))
+
+    results = {
+        # add new uuid for each detection 
+        "xyxy": curr_det.xyxy,
+        "confidence": curr_det.confidence,
+        "class_id": curr_det.class_id,
+        "mask": curr_det.mask,
+        "classes": obj_classes.get_classes_arr(),
+        "image_crops": image_crops,
+        "image_feats": image_feats_gpu,
+        "text_feats": text_feats,
+        "detection_class_labels": detection_class_labels,
+        # "labels": labels,
+        # "edges": edges,
+        "labels": [],
+        "edges": [],
+    }
+
+    return results, curr_det
+
 # A logger for this file
 @hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_stretch")
 # @profile
@@ -496,18 +565,6 @@ def main(cfg : DictConfig):
         orr.set_time_sequence("frame", frame_idx)
 
         color_tensor, depth_tensor, intrinsics, pose_tensor = node.color, node.depth, node.info, node.pose
-        #color_tensor2, depth_tensor2, intrinsics2, *_ = dataset[frame_idx]
-
-        # Read info about current frame from dataset
-        # color image
-        color_path = Path(cfg.color_path) / f"{frame_idx:06}.png"
-        # Check if path exists up to the file name
-        if not color_path.parent.exists():
-            # Create the directory if it doesn't exist
-            color_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(color_path), color_tensor.cpu().numpy())
-        image_original_pil = Image.open(color_path)
-        # color and depth tensors, and camera instrinsics matrix
 
         # Covert to numpy and do some sanity checks
         depth_tensor = depth_tensor[..., 0]
@@ -518,115 +575,40 @@ def main(cfg : DictConfig):
         image_rgb = (color_np).astype(np.uint8) # (H, W, 3)
         assert image_rgb.max() > 1, "Image is not in range [0, 255]"
 
+        # Store current frame image
+        color_path = Path(cfg.color_path) / f"{frame_idx:06}.png"
+        if not color_path.parent.exists():
+            color_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(color_path), image_rgb)
+
         # Load image detections for the current frame
         raw_gobs = None
         gobs = None # stands for grounded observations
-        detections_path = det_exp_pkl_path / (color_path.stem + ".pkl.gz")
         
         # vis_save_path_for_vlm = get_vlm_annotated_image_path(det_exp_vis_path, color_path)
         # vis_save_path_for_vlm_edges = get_vlm_annotated_image_path(det_exp_vis_path, color_path, w_edges=True)
         
         if run_detections:
-            results = None
-            # opencv can't read Path objects...
-            image = cv2.imread(str(color_path)) # This will in BGR color space
-            blur_score = cv2.Laplacian(image, cv2.CV_64F).var()
-            if blur_score < cfg.blur_threshold:
-                print(colored(f"Frame {frame_idx} is too blurry, skipping...\n" * 10, 'red'))
+            raw_gobs, current_detections = detect_objects(image_rgb, frame_idx, detection_model, sam_predictor, cfg, obj_classes, clip_model, clip_preprocess, clip_tokenizer, tracker)
+            if raw_gobs is None:
                 continue
-
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-            # Do initial object detection
-            results = detection_model.predict(color_path, conf=0.1, verbose=False)
-            confidences = results[0].boxes.conf.cpu().numpy()
-            detection_class_ids = results[0].boxes.cls.cpu().numpy().astype(int)
-            detection_class_labels = [f"{obj_classes.get_classes_arr()[class_id]} {class_idx}" for class_idx, class_id in enumerate(detection_class_ids)]
-            xyxy_tensor = results[0].boxes.xyxy
-            xyxy_np = xyxy_tensor.cpu().numpy()
-
-            # if there are detections,
-            # Get Masks Using SAM or MobileSAM
-            # UltraLytics SAM
-            if xyxy_tensor.numel() != 0:
-                sam_out = sam_predictor.predict(color_path, bboxes=xyxy_tensor, verbose=False)
-                masks_tensor = sam_out[0].masks.data
-
-                masks_np = masks_tensor.cpu().numpy()
-            else:
-                masks_np = np.empty((0, *color_tensor.shape[:2]), dtype=np.float64)
-
-            # Create a detections object that we will save later
-            curr_det = sv.Detections(
-                xyxy=xyxy_np,
-                confidence=confidences,
-                class_id=detection_class_ids,
-                mask=masks_np,
-            )
-            if curr_det.xyxy.size == 0:
-                print(f"No detections found for frame {frame_idx}")
-                continue
-            
-            # Make the edges
-            # print("")
-            # print("MAKING EDGES MAKING EDGES MAKING EDGES")
-            # print("")
-            # pdb.set_trace()
-            
-            # labels, edges, edge_image = make_vlm_edges(image, curr_det, obj_classes, detection_class_labels, det_exp_vis_path, color_path, cfg.make_edges, openai_client)
-            # print("")
-            # print("MADE EDGES MADE EDGES MADE EDGES")occupancy
-            # print("")
-            # pdb.set_trace()
-
-            image_crops, image_feats, text_feats = compute_clip_features_batched(
-                image_rgb, curr_det, clip_model, clip_preprocess, clip_tokenizer, obj_classes.get_classes_arr(), cfg.device)
-
-            # increment total object detections
-            tracker.increment_total_detections(len(curr_det.xyxy))
-
-            # Save results        # if node.i % 5 == 0:
-        #     plt.clf()
-        #     grid = add_objects_to_occupancy_grid(node.map, node.map_info, objects, max_height=2)
-        #     show_occupancy_grid(grid)
-        #     grid = dilate_map(grid, node.map_info, 0.15)
-        #     show_occupancy_grid(grid)
-            # Convert the detections to a dict. The elements are in np.array
-            results = {
-                # add new uuid for each detection 
-                "xyxy": curr_det.xyxy,
-                "confidence": curr_det.confidence,
-                "class_id": curr_det.class_id,
-                "mask": curr_det.mask,
-                "classes": obj_classes.get_classes_arr(),
-                "image_crops": image_crops,
-                "image_feats": image_feats,
-                "text_feats": text_feats,
-                "detection_class_labels": detection_class_labels,
-                # "labels": labels,
-                # "edges": edges,
-                "labels": [],
-                "edges": [],
-            }
-
-            raw_gobs = results
 
             # save the detections if needed
             if cfg.save_detections:
 
                 vis_save_path = (det_exp_vis_path / color_path.name).with_suffix(".jpg")
                 # Visualize and save the annotated image
-                annotated_image, labels = vis_result_fast(image, curr_det, obj_classes.get_classes_arr())
+                annotated_image, _ = vis_result_fast(image_rgb, current_detections, obj_classes.get_classes_arr())
                 cv2.imwrite(str(vis_save_path), annotated_image)
 
                 depth_image_rgb = cv2.normalize(depth_array, None, 0, 255, cv2.NORM_MINMAX)
                 depth_image_rgb = depth_image_rgb.astype(np.uint8)
                 depth_image_rgb = cv2.cvtColor(depth_image_rgb, cv2.COLOR_GRAY2BGR)
 
-                annotated_depth_image, labels = vis_result_fast_on_depth(depth_image_rgb, curr_det, obj_classes.get_classes_arr())
+                annotated_depth_image, _ = vis_result_fast_on_depth(depth_image_rgb, current_detections, obj_classes.get_classes_arr())
                 cv2.imwrite(str(vis_save_path).replace(".jpg", "_depth.jpg"), annotated_depth_image)
                 cv2.imwrite(str(vis_save_path).replace(".jpg", "_depth_only.jpg"), depth_image_rgb)
-                save_detection_results(det_exp_pkl_path / vis_save_path.stem, results)
+                save_detection_results(det_exp_pkl_path / vis_save_path.stem, raw_gobs)
         else:
             # Support current and old saving formats
             if os.path.exists(det_exp_pkl_path / color_path.stem):
@@ -634,7 +616,6 @@ def main(cfg : DictConfig):
             elif os.path.exists(det_exp_pkl_path / f"{int(color_path.stem):06}"):
                 raw_gobs = load_saved_detections(det_exp_pkl_path / f"{int(color_path.stem):06}")
             else:
-                # if no detections, throw an error
                 raise FileNotFoundError(f"No detections found for frame {frame_idx}at paths \n{det_exp_pkl_path / color_path.stem} or \n{det_exp_pkl_path / f'{int(color_path.stem):06}'}.")
 
         # get pose, this is the untrasformed pose.
