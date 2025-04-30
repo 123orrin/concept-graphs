@@ -150,7 +150,8 @@ class Subscriber(Node):
         self.sub_map = self.create_subscription(OccupancyGrid, 'map', self._map_callback, 1)
         self.pub_map = self.create_publisher(OccupancyGrid, 'map/conceptgraph', 1)
 
-        self.ready_to_process = False
+        self.time_info_color_depth_ = None
+        self.ready_info_color_depth_ = False
         self.map_with_button = cfg.map_with_button
         self.should_map = True
         self.query_heatmap = False
@@ -165,19 +166,29 @@ class Subscriber(Node):
 
         self.objects = None
 
+    def is_ready(self):
+        if self.ready_info_color_depth_:
+            self.pose = self._get_pose(time=self.time_info_color_depth_)
+            return self.pose is not None
+        else:
+            return False
+    
+    def reset_ready(self):
+        self.ready_info_color_depth_ = False
+        self.ready_pose_ = False
+
     def callback_sync(self, info_msg, color_msg, depth_msg):
-        self.ready_to_process = False
+        self.ready_info_color_depth_ = False
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
-        self.pose = self._get_pose(time=color_msg.header.stamp)
-        should_map = (not self.map_with_button) or self.should_map# PS4 home button
-        if (self.pose is not None) and should_map:
-            self.ready_to_process = True
+        should_map = (not self.map_with_button) or self.should_map # PS4 home button
+        self.time_info_color_depth_ = color_msg.header.stamp
+        self.ready_info_color_depth_ = should_map
 
     def callback_sync_sai(self, info_msg, color_msg, depth_msg, pose_msg):
-        self.ready_to_process = False
+        self.ready_info_color_depth_ = False
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
         self.pose = self._process_pose_sai(pose_msg)
-        self.ready_to_process = True
+        self.ready_info_color_depth_ = True
 
     def _joy_callback(self, msg):
         self.should_map = msg.axes[-1] == 1
@@ -366,11 +377,10 @@ class Subscriber(Node):
             if diff > self.MAX_MESSAGE_DELAY:
                 print(colored(f"Transform is too old! Difference is {diff}. Maximum allowed delay is {self.MAX_MESSAGE_DELAY}.", 'red'))
                 return None
-            # Process Pose
+            
             return self._process_pose(transform_msg)
         except Exception as e:
-            print(f"Failed to get pose: {e}")
-            return None    
+            return None
         
 
 # A logger for this file
@@ -474,10 +484,10 @@ def main(cfg : DictConfig):
     query_node.attach_objects(objects)
     while rclpy.ok():
         
-        while not node.ready_to_process:
+        while not node.is_ready():
             rclpy.spin_once(node, timeout_sec=0)
             rclpy.spin_once(query_node, timeout_sec=0)
-        node.ready_to_process = False
+        node.reset_ready()
 
         local_time = time.time()
         frame_idx += 1
