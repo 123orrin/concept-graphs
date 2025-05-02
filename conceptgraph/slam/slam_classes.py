@@ -8,7 +8,8 @@ import torch.nn.functional as F
 import numpy as np
 import open3d as o3d
 from scipy.special import gammaln
-from scipy.stats import norm, uniform 
+from scipy.stats import norm, uniform
+import ros2_numpy
 
 def to_numpy(tensor):
     if isinstance(tensor, np.ndarray):
@@ -112,8 +113,43 @@ class DetectionList(list):
             for i in range(len(self)):
                 self[i]['pcd'].paint_uniform_color(instance_colors[i])
                 self[i]['bbox'].color = instance_colors[i]
-            
-    
+
+    def get_point_cloud_msg(self, frame_id):
+        num_points = np.sum(len(obj["pcd"].points) for obj in self if "pcd" in obj)
+
+        structured_array = np.zeros(
+            num_points,
+            dtype=[
+                ("x", np.float32),
+                ("y", np.float32),
+                ("z", np.float32),
+                ("rgb", np.float32),
+            ],
+        )
+        offset = 0
+        for obj in self:
+            if "pcd" not in obj:
+                continue
+            num_points_obj = len(obj["pcd"].points)
+            obj_points = np.asarray(obj["pcd"].points)
+            obj_colors = (np.asarray(obj["pcd"].colors) * 255).astype(np.uint32)
+
+            structured_array["x"][offset : offset + num_points_obj] = obj_points[:, 0]
+            structured_array["y"][offset : offset + num_points_obj] = obj_points[:, 1]
+            structured_array["z"][offset : offset + num_points_obj] = obj_points[:, 2]
+            structured_array["rgb"][offset : offset + num_points_obj] = (
+                (obj_colors[:, 0] << 16)
+                | (obj_colors[:, 1] << 8)
+                | (obj_colors[:, 2] << 0)
+            )
+
+            offset += num_points_obj
+
+        return ros2_numpy.point_cloud2.array_to_pointcloud2(
+            structured_array, frame_id=frame_id
+        )
+
+
 class MapObjectList(DetectionList):
     def compute_similarities(self, new_clip_ft):
         '''

@@ -152,6 +152,7 @@ class Subscriber(Node):
 
         self.sub_map = self.create_subscription(OccupancyGrid, 'map', self._map_callback, 1)
         self.pub_map = self.create_publisher(OccupancyGrid, 'map/conceptgraph', 1)
+        self.pub_pc = self.create_publisher(PointCloud2, 'map/objects', 1)
 
         self.time_info_color_depth_ = None
         self.ready_info_color_depth_ = False
@@ -191,6 +192,14 @@ class Subscriber(Node):
         self.info, self.color, self.depth = self._process_inputs(info_msg, color_msg, depth_msg)
         self.pose = self._process_pose_sai(pose_msg)
         self.ready_info_color_depth_ = True
+
+    def publish_object_point_clouds(self):
+        if self.objects is None:
+            return
+        # Create a PointCloud2 message
+        self.objects.color_by_instance()
+        pc_msg = self.objects.get_point_cloud_msg(frame_id="map")
+        self.pub_pc.publish(pc_msg)
 
     def _joy_callback(self, msg):
         self.should_map = msg.axes[-1] == 1
@@ -554,6 +563,7 @@ def main(cfg : DictConfig):
         heatmap_publisher.object_list = objects
         heatmap_publisher.missing_object_list = objects_missing
 
+        node.publish_object_point_clouds()
         while not node.is_ready():
             rclpy.spin_once(node, timeout_sec=0)
             rclpy.spin_once(query_node, timeout_sec=0)
