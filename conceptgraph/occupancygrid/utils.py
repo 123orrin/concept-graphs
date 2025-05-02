@@ -60,9 +60,9 @@ def world_to_cell(world_xy : np.ndarray, occupancy_origin_xy: tuple, occupancy_r
     """
     Convert world coordinates to cell coordinates.
     """
-    if len(world_xy.shape) == 1:
-        world_xy = world_xy.reshape(1, -1)
-    elif not (len(world_xy.shape) == 2 and world_xy.shape[1] == 2):
+    if len(np.shape(world_xy)) == 1:
+        world_xy = np.reshape(world_xy, (1, -1))
+    elif not (len(np.shape(world_xy)) == 2 and np.shape(world_xy)[1] == 2):
         raise ValueError("world_xy must be a 2D array with shape (N, 2) or a 1D array with shape (2,)")
     offset_xy = world_xy - np.reshape(occupancy_origin_xy, (1, 2))
     offset_xy = np.floor(offset_xy / occupancy_resolution).astype(np.int32)
