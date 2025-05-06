@@ -37,14 +37,19 @@ def add_objects_to_occupancy_grid(occupancy_grid: np.ndarray, occupancy_info: di
             continue
         corners = [(lower[1], lower[0]), (upper[1], upper[0])]
         # left-bottom, right-top
-        corners = [convert_world_to_cell(corner, occupancy_info) for corner in corners]
+        corners = [convert_world_to_cell(corner, occupancy_info, check_within_map=False) for corner in corners]
+
+        # clip corners to be within the grid
+        corners[0] = (min(occupancy_info['height'] - 1, max(0, corners[0][0])), min(occupancy_info['width'] - 1, max(0, corners[0][1])))
+        corners[1] = (min(occupancy_info['height'] - 1, max(0, corners[1][0])), min(occupancy_info['width'] - 1, max(0, corners[1][1])))
+
         mask[corners[0][0]:corners[1][0], corners[0][1]:corners[1][1]] = True
 
     grid[mask] = OccupancyGridValue.OCCUPIED.value
 
     return grid
 
-def convert_world_to_cell(world: tuple, occupancy_info: dict) -> tuple:
+def convert_world_to_cell(world: tuple, occupancy_info: dict, check_within_map: bool = True) -> tuple:
     """
     Convert world coordinates to a cell.
     """
@@ -52,8 +57,9 @@ def convert_world_to_cell(world: tuple, occupancy_info: dict) -> tuple:
     origin = occupancy_info['origin']
     y = int((world[0] - origin[1]) / resolution) # Coords are (y,x) but origin is (x,y,z)
     x = int((world[1] - origin[0]) / resolution)
-    assert 0 <= x < occupancy_info['width'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. x: %d, width: %d" % (x, occupancy_info['width'])
-    assert 0 <= y < occupancy_info['height'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. y: %d, height: %d" % (y, occupancy_info['height'])
+    if check_within_map:
+        assert 0 <= x < occupancy_info['width'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. x: %d, width: %d" % (x, occupancy_info['width'])
+        assert 0 <= y < occupancy_info['height'], "Out of Bounds: Failed to convert world coordinate to grid coordinate. y: %d, height: %d" % (y, occupancy_info['height'])
     return (y, x)
 
 def world_to_cell(world_xy : np.ndarray, occupancy_origin_xy: tuple, occupancy_resolution: float) -> np.ndarray:
