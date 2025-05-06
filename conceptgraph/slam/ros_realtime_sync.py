@@ -3,6 +3,7 @@ The script is used to model Grounded SAM detections in 3D, it assumes the tag2te
 '''
 
 # Standard library imports
+import logging
 import os
 from pathlib import Path
 from termcolor import colored
@@ -462,6 +463,7 @@ def detect_objects(image_rgb: np.ndarray, frame_idx: int, detection_model: Model
 @hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_stretch")
 # @profile
 def main(cfg : DictConfig):
+    logging.getLogger().setLevel(level=logging.INFO)
     tracker = MappingTracker()
     
     orr = OptionalReRun()
