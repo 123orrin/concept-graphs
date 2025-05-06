@@ -174,7 +174,8 @@ def compute_clip_features_batched(image, detections, clip_model, clip_preprocess
         # text_features /= text_features.norm(dim=-1, keepdim=True)
     
     # Convert to numpy
-    image_feats = image_features.cpu().numpy()
+    move_features_to_cpu = False
+    image_feats = image_features.cpu().numpy() if move_features_to_cpu else image_features
     # text_feats = text_features.cpu().numpy()
     # image_feats = []
     text_feats = []

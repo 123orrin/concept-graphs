@@ -43,7 +43,7 @@ class DetectionList(list):
             if isinstance(v, np.ndarray):
                 v = torch.from_numpy(v)
             values.append(v)
-        return torch.stack(values, dim=0)
+        return torch.stack(values, dim=0) if(len(values) > 0) else torch.empty(0)
     
     def get_stacked_values_numpy(self, key, idx:int=None):
         values = self.get_stacked_values_torch(key, idx)

@@ -868,6 +868,8 @@ def filter_gobs(
             gobs[k] = [gobs[k][i] for i in idx_to_keep]
         elif isinstance(gobs[k], np.ndarray):
             gobs[k] = gobs[k][idx_to_keep]
+        elif isinstance(gobs[k], torch.Tensor):
+            gobs[k] = gobs[k][idx_to_keep]
         else:
             raise NotImplementedError(f"Unhandled type {type(gobs[k])}")
 
