@@ -1,4 +1,4 @@
-from conceptgraph.occupancygrid.utils import world_to_cell
+from conceptgraph.occupancygrid.utils import adjust_map_size, world_to_cell
 import rclpy
 import rclpy.duration
 from rclpy.node import Node
@@ -93,7 +93,6 @@ class OccupancyMapPublisher(Node):
             self.upper_corner_xy = np.maximum(point_bounds_min, self.upper_corner_xy + self.margin)
             self.corners_updated = True
 
-
     def _ready(self):
         return self.points_updated and self.tf_buffer.can_transform(
             "map",
@@ -122,55 +121,21 @@ class OccupancyMapPublisher(Node):
         occupancy_grid.data = map.flatten(order="C").astype(np.int8).tolist()
         self.publisher.publish(occupancy_grid)
 
-    def _adjust_map_size(self, lower_corner_xy, upper_corner_xy):
-        if lower_corner_xy[0] > upper_corner_xy[0] or lower_corner_xy[1] > upper_corner_xy[1]:
-            raise ValueError("Lower corner must be less than upper corner")
-
-        # calculate cell indices for the corners
-        new_lower_cell_world, new_upper_cell_world = world_to_cell(
-            np.vstack((lower_corner_xy, upper_corner_xy)),
-            (0, 0),
+    def _adjust_map_size(
+        self, lower_corner_xy: np.ndarray, upper_corner_xy: np.ndarray
+    ):
+        (
+            self.occupancy,
+            self.occupancy_info["origin"],
+            self.occupancy_info["width"],
+            self.occupancy_info["height"],
+        ) = adjust_map_size(
+            self.occupancy,
             self.occupancy_info["resolution"],
+            self.occupancy_info["origin"],
+            lower_corner_xy,
+            upper_corner_xy,
         )
-
-        # create new map with adjusted size
-        new_height = new_upper_cell_world[1] - new_lower_cell_world[1] + 1
-        new_width = new_upper_cell_world[0] - new_lower_cell_world[0] + 1
-        new_origin = new_lower_cell_world * self.occupancy_info["resolution"]
-        new_occupancy = np.full(
-            (new_height, new_width),
-            -1,
-            dtype=np.int8,
-        )
-
-        # insert data from the old map into the new map
-        # get lower-left and upper-right corners of the old map in cell coordinates (relative to world, i.e., (0,0))
-        # add half of resolution to ensure consistent rounding
-        old_lower_cell_world = world_to_cell(np.array(self.occupancy_info["origin"]) + self.occupancy_info["resolution"]/2, (0, 0), self.occupancy_info["resolution"])[0]
-        old_upper_cell_world = (self.occupancy.shape[1] - 1) + old_lower_cell_world[0], (self.occupancy.shape[0] - 1) + old_lower_cell_world[1]
-
-        # calculate the overlap between the old and new maps (in world cell coordinates)
-        overlap_lower_cell_world = np.maximum(old_lower_cell_world, new_lower_cell_world)
-        overlap_upper_cell_world = np.minimum(old_upper_cell_world, new_upper_cell_world)
-
-        # convert the overlap coordinates to indices in the new map
-        new_lower_index = overlap_lower_cell_world - new_lower_cell_world
-        new_upper_index = overlap_upper_cell_world - new_lower_cell_world
-        
-        # convert the overlap coordinates to indices in the old map
-        old_lower_index = overlap_lower_cell_world - old_lower_cell_world
-        old_upper_index = overlap_upper_cell_world - old_lower_cell_world
-
-        # copy the overlapping data from the old map to the new map
-        new_occupancy[new_lower_index[1]:new_upper_index[1] + 1, new_lower_index[0]:new_upper_index[0] + 1] = self.occupancy[
-            old_lower_index[1]:old_upper_index[1] + 1, old_lower_index[0]:old_upper_index[0] + 1
-        ]
-
-        # update the occupancy info
-        self.occupancy = new_occupancy
-        self.occupancy_info["origin"] = new_origin
-        self.occupancy_info["width"] = new_width * self.occupancy_info["resolution"]
-        self.occupancy_info["height"] = new_height * self.occupancy_info["resolution"]
 
     def main(self):
         while rclpy.ok():
@@ -218,9 +183,6 @@ class OccupancyMapPublisher(Node):
 
             self.get_logger().info("Occupancy map published.")
             self._publish_map(self.occupancy)
-
-
-
 
 
 def main(args=None):

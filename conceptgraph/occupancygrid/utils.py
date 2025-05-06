@@ -109,3 +109,49 @@ def dilate_map_avl(binary_map: np.ndarray, dilate_iter: int = 0, gaussian_sigma:
     )
     binary_map = cv2.resize(binary_map.astype(float), (w, h))
     return binary_map
+
+def adjust_map_size(map: np.ndarray, map_resolution: float, map_origin_xz: tuple, lower_corner_xy: np.ndarray, upper_corner_xy: np.ndarray):
+    if lower_corner_xy[0] > upper_corner_xy[0] or lower_corner_xy[1] > upper_corner_xy[1]:
+        raise ValueError("Lower corner must be less than upper corner")
+
+    # calculate cell indices for the corners
+    new_lower_cell_world, new_upper_cell_world = world_to_cell(
+        np.vstack((lower_corner_xy, upper_corner_xy)),
+        (0, 0),
+        map_resolution,
+    )
+
+    # create new map with adjusted size
+    new_height = new_upper_cell_world[1] - new_lower_cell_world[1] + 1
+    new_width = new_upper_cell_world[0] - new_lower_cell_world[0] + 1
+    new_origin = new_lower_cell_world * map_resolution
+    new_occupancy = np.full(
+        (new_height, new_width),
+        -1,
+        dtype=np.int8,
+    )
+
+    # insert data from the old map into the new map
+    # get lower-left and upper-right corners of the old map in cell coordinates (relative to world, i.e., (0,0))
+    # add half of resolution to ensure consistent rounding
+    old_lower_cell_world = world_to_cell(np.array(map_origin_xz) + map_resolution/2, (0, 0), map_resolution)[0]
+    old_upper_cell_world = (map.shape[1] - 1) + old_lower_cell_world[0], (map.shape[0] - 1) + old_lower_cell_world[1]
+
+    # calculate the overlap between the old and new maps (in world cell coordinates)
+    overlap_lower_cell_world = np.maximum(old_lower_cell_world, new_lower_cell_world)
+    overlap_upper_cell_world = np.minimum(old_upper_cell_world, new_upper_cell_world)
+
+    # convert the overlap coordinates to indices in the new map
+    new_lower_index = overlap_lower_cell_world - new_lower_cell_world
+    new_upper_index = overlap_upper_cell_world - new_lower_cell_world
+    
+    # convert the overlap coordinates to indices in the old map
+    old_lower_index = overlap_lower_cell_world - old_lower_cell_world
+    old_upper_index = overlap_upper_cell_world - old_lower_cell_world
+
+    # copy the overlapping data from the old map to the new map
+    new_occupancy[new_lower_index[1]:new_upper_index[1] + 1, new_lower_index[0]:new_upper_index[0] + 1] = map[
+        old_lower_index[1]:old_upper_index[1] + 1, old_lower_index[0]:old_upper_index[0] + 1
+    ]
+
+    return new_occupancy, new_origin, new_width * map_resolution, new_height * map_resolution

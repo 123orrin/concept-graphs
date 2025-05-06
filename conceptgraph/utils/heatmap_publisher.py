@@ -22,12 +22,17 @@ class HeatmapProvider(Node):
 
         self.query_text = ""
         self.query_feature_dev = None
+        self.margin = 0.2
         self.occupancy_info = {
             "resolution": 0.05,  # meters per pixel
-            "width": 3.0, # meters
-            "height": 2.0,
-            "origin": (-1, -1),
+            "width": 0.1,  # meters
+            "height": 0.1,
+            "origin": (0, 0),
         }
+        self.lower_corner_xy = np.array(self.occupancy_info["origin"])
+        self.upper_corner_xy = np.array(self.occupancy_info["origin"]) + np.array(
+            (self.occupancy_info["width"], self.occupancy_info["height"])
+        )
 
         self.query_subscription = self.create_subscription(
             StringMsg, "heatmap_goal", self.query_callback, 1
@@ -49,15 +54,37 @@ class HeatmapProvider(Node):
             return
 
         # Create a heatmap from the object list
+        self._update_map_size()
         heatmap = self._create_heatmap(self.object_list)
         heatmap += self._create_heatmap(self.missing_object_list)
         if heatmap.sum() > 0:
             heatmap /= np.sum(heatmap)
 
-        # Normalize the heatmap to [0, 1]
-        heatmap /= np.max(heatmap)
-
         self._publish_heatmap(heatmap * 100)
+
+    def _update_map_size(
+        self,
+    ):
+        if len(self.object_list) == 0:
+            return
+        points = np.vstack(
+            [np.vstack(obj["centroid_locations"])[:, :2] for obj in self.object_list]
+        )
+        point_bounds_min = np.min(points, axis=0)
+        point_bounds_max = np.max(points, axis=0)
+        if np.any(point_bounds_min < self.lower_corner_xy - self.margin) or np.any(
+            point_bounds_max > self.upper_corner_xy + self.margin
+        ):
+            self.lower_corner_xy = np.minimum(
+                point_bounds_min, self.lower_corner_xy - self.margin
+            )
+            self.upper_corner_xy = np.maximum(
+                point_bounds_min, self.upper_corner_xy + self.margin
+            )
+            self.occupancy_info["origin"] = self.lower_corner_xy
+            self.occupancy_info["width"], self.occupancy_info["height"] = np.floor((
+                self.upper_corner_xy - self.lower_corner_xy
+            ) / self.occupancy_info["resolution"]) * self.occupancy_info["resolution"]
 
     def _get_object_relevancy(
         prior_clip_feature: torch.tensor,
@@ -76,7 +103,7 @@ class HeatmapProvider(Node):
             similarity_scores = np.empty((0))
         return similarity_scores
 
-    def _create_heatmap(self, object_list: ProbabilisticMapObjectList, similarity_threshold: float = 0.2):
+    def _create_heatmap(self, object_list: ProbabilisticMapObjectList, similarity_threshold: float = 0.3):
         similarity_scores = HeatmapProvider._get_object_relevancy(self.query_feature_dev, object_list)
 
         heatmap = np.zeros((int(self.occupancy_info['height'] / self.occupancy_info['resolution']), int(self.occupancy_info['width'] / self.occupancy_info['resolution'])))
@@ -104,7 +131,7 @@ class HeatmapProvider(Node):
         ).squeeze().numpy()
         if heatmap.sum() > 0:
             heatmap /= np.sum(heatmap)
-            
+
         return heatmap
 
     def _publish_heatmap(self, heatmap: np.ndarray):
