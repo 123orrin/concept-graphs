@@ -44,9 +44,9 @@ class OccupancyMapPublisher(Node):
         self.publisher = self.create_publisher(OccupancyGrid, "/occupancy_map", 10)
         self.occupancy_info = {
             "resolution": 0.05,  # meters per pixel
-            "width": 3.0,  # meters
-            "height": 2.0,
-            "origin": (-1, -1),
+            "width": (self.upper_corner_xy - self.lower_corner_xy)[0],  # meters
+            "height": (self.upper_corner_xy - self.lower_corner_xy)[1],
+            "origin": tuple(self.lower_corner_xy),
             "frame_id": "map",
         }
         self.occupancy = np.full(
@@ -81,17 +81,19 @@ class OccupancyMapPublisher(Node):
         return tf.transform.translation.z
 
     def _point_cloud_callback(self, msg):
-        # Convert PointCloud2 to numpy array
-        self.points = ros2_numpy.point_cloud2.pointcloud2_to_xyz_array(msg).T
-        self.point_receive_time = msg.header.stamp
-        self.points_updated = True
+        # only update when last message was used
+        if not self.points_updated:
+            # Convert PointCloud2 to numpy array
+            self.points = ros2_numpy.point_cloud2.pointcloud2_to_xyz_array(msg).T
+            self.point_receive_time = msg.header.stamp
+            self.points_updated = True
 
-        point_bounds_min = np.min(self.points[:2,:], axis=1)
-        point_bounds_max = np.max(self.points[:2,:], axis=1)
-        if np.any(point_bounds_min < self.lower_corner_xy - self.margin) or np.any(point_bounds_max > self.upper_corner_xy + self.margin):
-            self.lower_corner_xy = np.minimum(point_bounds_min, self.lower_corner_xy - self.margin)
-            self.upper_corner_xy = np.maximum(point_bounds_min, self.upper_corner_xy + self.margin)
-            self.corners_updated = True
+            point_bounds_min = np.min(self.points[:2,:], axis=1)
+            point_bounds_max = np.max(self.points[:2,:], axis=1)
+            if np.any(point_bounds_min < self.lower_corner_xy - self.margin) or np.any(point_bounds_max > self.upper_corner_xy + self.margin):
+                self.lower_corner_xy = np.minimum(point_bounds_min, self.lower_corner_xy - self.margin)
+                self.upper_corner_xy = np.maximum(point_bounds_max, self.upper_corner_xy + self.margin)
+                self.corners_updated = True
 
     def _ready(self):
         return self.points_updated and self.tf_buffer.can_transform(
@@ -173,13 +175,13 @@ class OccupancyMapPublisher(Node):
                 self.occupancy_info["resolution"],
             )
 
-            occupied = points[:, 2] > self.floor_height
+            occupied = (points[:, 2] > self.floor_height) & (points[:, 2] < self.robot_height)
             inside_map = (cells[:, 0] >= 0) & (cells[:, 0] < self.occupancy.shape[1]) & (cells[:, 1] >= 0) & (cells[:, 1] < self.occupancy.shape[0])
             occupied_cells = cells[np.logical_and(occupied, inside_map), :]
             unoccupied_cells = cells[np.logical_and(np.logical_not(occupied), inside_map), :]
 
-            self.occupancy[occupied_cells[:, 1], occupied_cells[:, 0]] = 100
             self.occupancy[unoccupied_cells[:, 1], unoccupied_cells[:, 0]] = 0
+            self.occupancy[occupied_cells[:, 1], occupied_cells[:, 0]] = 100
 
             self.get_logger().info("Occupancy map published.")
             self._publish_map(self.occupancy)

@@ -399,7 +399,7 @@ def detect_objects(image_rgb: np.ndarray, frame_idx: int, detection_model: Model
     blur_score = cv2.Laplacian(image_rgb, cv2.CV_64F).var()
     if blur_score < cfg.blur_threshold:
         print(colored(f"Frame {frame_idx} is too blurry, skipping...\n" * 10, 'red'))
-        return None
+        return None, None
     
     # Convert the numpy array to a PIL Image
     image_pil = Image.fromarray(image_rgb)
@@ -432,7 +432,7 @@ def detect_objects(image_rgb: np.ndarray, frame_idx: int, detection_model: Model
     )
     if curr_det.xyxy.size == 0:
         print(f"No detections found for frame {frame_idx}")
-        return None
+        return None, None
 
     image_crops, image_feats_gpu, text_feats = compute_clip_features_batched(
         image_rgb, curr_det, clip_model, clip_preprocess, clip_tokenizer, obj_classes.get_classes_arr(), cfg.device)
