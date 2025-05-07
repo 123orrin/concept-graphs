@@ -1,16 +1,22 @@
 import numpy as np
 import torch
+from enum import Enum
 from torch.nn import functional as F
 from rclpy.node import Node
 from std_msgs.msg import String as StringMsg
 from nav_msgs.msg import OccupancyGrid
+import matplotlib.pyplot as plt
 
 from conceptgraph.slam.slam_classes import ProbabilisticMapObjectList
 from conceptgraph.occupancygrid.utils import world_to_cell
 from geometry_msgs.msg import Pose
 
+class SimilarityMeasure(Enum):
+    COSINE = 0
+    SAME_LABEL = 1
+
 class HeatmapProvider(Node):
-    def __init__(self, clip_model, clip_tokenizer, object_list: ProbabilisticMapObjectList, missing_object_list: ProbabilisticMapObjectList):
+    def __init__(self, clip_model, clip_tokenizer, object_list: ProbabilisticMapObjectList, missing_object_list: ProbabilisticMapObjectList, similarity_measure: SimilarityMeasure = SimilarityMeasure.SAME_LABEL):
         super().__init__("heatmap_publisher")
 
         self.clip_model = clip_model
@@ -19,9 +25,15 @@ class HeatmapProvider(Node):
         self.missing_object_list = missing_object_list
 
         self.device = "cuda"
+        self.similarity_measure = similarity_measure
+        self.plot_heatmap = True
 
         self.query_text = ""
         self.query_feature_dev = None
+        self.query_subscription = self.create_subscription(
+            StringMsg, "heatmap_goal", self.query_callback, 1
+        )
+
         self.margin = 0.2
         self.occupancy_info = {
             "resolution": 0.05,  # meters per pixel
@@ -33,14 +45,11 @@ class HeatmapProvider(Node):
         self.upper_corner_xy = np.array(self.occupancy_info["origin"]) + np.array(
             (self.occupancy_info["width"], self.occupancy_info["height"])
         )
-
-        self.query_subscription = self.create_subscription(
-            StringMsg, "heatmap_goal", self.query_callback, 1
-        )
         self.heatmap_publisher = self.create_publisher(OccupancyGrid, "heatmap", 10)
+
         self.timer = self.create_timer(1, self.update_callback)
 
-    def query_callback(self, msg):
+    def query_callback(self, msg: StringMsg) -> None:
         self.query_text = msg.data
 
         text_queries = [self.query_text]
@@ -49,7 +58,7 @@ class HeatmapProvider(Node):
 
         self.get_logger().info(f"Received query: {self.query_text}")
 
-    def update_callback(self):
+    def update_callback(self) -> None:
         if self.query_text == "":
             return
 
@@ -60,7 +69,9 @@ class HeatmapProvider(Node):
         if heatmap.sum() > 0:
             heatmap /= np.sum(heatmap)
 
-        self._publish_heatmap(heatmap * 100)
+        self._publish_heatmap(heatmap * 255)
+        if self.plot_heatmap:
+            self._plot_heatmap(heatmap)
 
     def _update_map_size(
         self,
@@ -79,36 +90,46 @@ class HeatmapProvider(Node):
                 point_bounds_min, self.lower_corner_xy - self.margin
             )
             self.upper_corner_xy = np.maximum(
-                point_bounds_min, self.upper_corner_xy + self.margin
+                point_bounds_max, self.upper_corner_xy + self.margin
             )
-            self.occupancy_info["origin"] = self.lower_corner_xy
+            self.occupancy_info["origin"] = self.lower_corner_xy    
             self.occupancy_info["width"], self.occupancy_info["height"] = np.floor((
                 self.upper_corner_xy - self.lower_corner_xy
             ) / self.occupancy_info["resolution"]) * self.occupancy_info["resolution"]
 
     def _get_object_relevancy(
+        self,
         prior_clip_feature: torch.tensor,
         objects: ProbabilisticMapObjectList,
     ) -> torch.tensor:
         """
         Get the similar objects based on the CLIP feature
         """
-        if len(objects) > 0:
+        if len(objects) == 0:
+            return np.empty((0))
+
+        if self.similarity_measure == SimilarityMeasure.SAME_LABEL:
+            similarity_scores = np.zeros(len(objects))
+            mask = [o["class_name"] == self.query_text for o in objects]
+            similarity_scores[mask] = 1
+
+        elif self.similarity_measure == SimilarityMeasure.COSINE:
             objects_clip_fts = objects.get_stacked_values_torch("clip_ft")
             objects_clip_fts = objects_clip_fts.to("cuda")
-
             similarity_scores = F.cosine_similarity(prior_clip_feature, objects_clip_fts, dim=1)
             similarity_scores = similarity_scores.cpu().numpy()
+
         else:
-            similarity_scores = np.empty((0))
+            raise ValueError("Invalid similarity measure")
+        
         return similarity_scores
 
-    def _create_heatmap(self, object_list: ProbabilisticMapObjectList, similarity_threshold: float = 0.3):
-        similarity_scores = HeatmapProvider._get_object_relevancy(self.query_feature_dev, object_list)
+    def _create_heatmap(self, object_list: ProbabilisticMapObjectList, similarity_threshold: float = 0.3) -> np.ndarray:
+        similarity_scores = self._get_object_relevancy(self.query_feature_dev, object_list)
 
         heatmap = np.zeros((int(self.occupancy_info['height'] / self.occupancy_info['resolution']), int(self.occupancy_info['width'] / self.occupancy_info['resolution'])))
 
-        kernel = self._gaussian_kernel(0.2)
+        kernel = self._gaussian_kernel(0.4)
 
         for obj, sim in zip(object_list, similarity_scores):
             if sim > similarity_threshold:
@@ -134,7 +155,7 @@ class HeatmapProvider(Node):
 
         return heatmap
 
-    def _publish_heatmap(self, heatmap: np.ndarray):
+    def _publish_heatmap(self, heatmap: np.ndarray) -> None:
         occupancy_grid = OccupancyGrid()
         occupancy_grid.header.stamp = self.get_clock().now().to_msg()
         occupancy_grid.header.frame_id = "map"
@@ -153,8 +174,9 @@ class HeatmapProvider(Node):
 
         occupancy_grid.data = heatmap.flatten(order="C").astype(np.int8).tolist()
         self.heatmap_publisher.publish(occupancy_grid)
+        self.get_logger().info("Published heatmap")
 
-    def _gaussian_kernel(self, kernel_size_meters: int):
+    def _gaussian_kernel(self, kernel_size_meters: int) -> np.ndarray:
         # Apply a Gaussian kernel to smooth the heatmap
         kernel_size = int(kernel_size_meters / self.occupancy_info["resolution"])
 
@@ -169,3 +191,34 @@ class HeatmapProvider(Node):
         gaussian_kernel = np.exp(-(x**2 + y**2) / (2 * sigma**2))
         gaussian_kernel /= gaussian_kernel.sum()
         return gaussian_kernel
+    
+    def _init_heatmap_plot(self):
+        self.fig, self.ax = plt.subplots()
+        self.ax.set_title("Heatmap")
+        self.ax.set_xlabel("X (cells)")
+        self.ax.set_ylabel("Y (cells)")
+    
+    def _plot_heatmap(self, heatmap: np.ndarray):
+        if not self.plot_heatmap:
+            return
+
+        if not hasattr(self, 'fig'):
+            self._init_heatmap_plot()
+
+        self.ax.clear()
+        self.ax.imshow(heatmap, cmap='hot', interpolation='nearest')
+        self.ax.yaxis.set_inverted(False)
+        self.ax.set_title("Heatmap")
+        self.ax.set_xlabel("X (m)")
+        self.ax.set_ylabel("Y (m)")
+        
+        x_ticks = np.arange(0, heatmap.shape[1], step=int(heatmap.shape[1] / 5) + 1)
+        y_ticks = np.arange(0, heatmap.shape[0], step=int(heatmap.shape[0] / 5) + 1)
+        x_labels = (x_ticks * self.occupancy_info["resolution"] + self.occupancy_info["origin"][0]).round(2)
+        y_labels = (y_ticks * self.occupancy_info["resolution"] + self.occupancy_info["origin"][1]).round(2)
+        self.ax.set_xticks(x_ticks)
+        self.ax.set_xticklabels(x_labels)
+        self.ax.set_yticks(y_ticks)
+        self.ax.set_yticklabels(y_labels)
+
+        plt.pause(0.01)
