@@ -26,6 +26,7 @@ class OccupancyMapPublisher(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.floor_height = self._get_robot_base_z() + 0.05
+        self.robot_height = self.floor_height + 1.8
 
         self.subscription = self.create_subscription(
             PointCloud2,
