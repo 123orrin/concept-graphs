@@ -8,12 +8,15 @@ from lsy_interfaces.srv import ConceptGraphQuery
 from conceptgraph.slam.slam_classes import DetectionList
 
 
-class QueryServiceProvider(Node):
+class QueryServiceProvider:
     """ Node which hosts a service for querying a list of objects (DetectionList)
     """
-    def __init__(self, model, tokenizer):
-        super().__init__('query_node')
-        self.query_service = self.create_service(ConceptGraphQuery, 'conceptgraph_query_service', self.query_callback)
+    def __init__(self, model, tokenizer, node = None):
+        if node is None:
+            self.node = Node('query_node')
+        else:
+            self.node = node
+        self.query_service = self.node.create_service(ConceptGraphQuery, 'conceptgraph_query_service', self.query_callback)
 
         self.clip_model = model
         self.clip_tokenizer = tokenizer

@@ -15,9 +15,12 @@ class SimilarityMeasure(Enum):
     COSINE = 0
     SAME_LABEL = 1
 
-class HeatmapProvider(Node):
-    def __init__(self, clip_model, clip_tokenizer, object_list: ProbabilisticMapObjectList, missing_object_list: ProbabilisticMapObjectList, similarity_measure: SimilarityMeasure = SimilarityMeasure.SAME_LABEL):
-        super().__init__("heatmap_publisher")
+class HeatmapProvider:
+    def __init__(self, clip_model, clip_tokenizer, object_list: ProbabilisticMapObjectList, missing_object_list: ProbabilisticMapObjectList, similarity_measure: SimilarityMeasure = SimilarityMeasure.SAME_LABEL, node = None):
+        if node is None:
+            self.node = Node("heatmap_publisher")
+        else:
+            self.node = node
 
         self.clip_model = clip_model
         self.clip_tokenizer = clip_tokenizer
@@ -30,7 +33,7 @@ class HeatmapProvider(Node):
 
         self.query_text = ""
         self.query_feature_dev = None
-        self.query_subscription = self.create_subscription(
+        self.query_subscription = self.node.create_subscription(
             StringMsg, "heatmap_goal", self.query_callback, 1
         )
 
@@ -45,9 +48,9 @@ class HeatmapProvider(Node):
         self.upper_corner_xy = np.array(self.occupancy_info["origin"]) + np.array(
             (self.occupancy_info["width"], self.occupancy_info["height"])
         )
-        self.heatmap_publisher = self.create_publisher(OccupancyGrid, "heatmap", 10)
+        self.heatmap_publisher = self.node.create_publisher(OccupancyGrid, "heatmap", 10)
 
-        self.timer = self.create_timer(1, self.update_callback)
+        self.timer = self.node.create_timer(1, self.update_callback)
 
     def query_callback(self, msg: StringMsg) -> None:
         self.query_text = msg.data

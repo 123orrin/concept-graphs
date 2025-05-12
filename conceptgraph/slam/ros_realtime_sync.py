@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 import hydra
 import open_clip
 from ultralytics import YOLO, SAM
@@ -384,7 +384,7 @@ class Subscriber(Node):
             transform_time = rclpy.time.Time.from_msg(transform_msg.header.stamp)
             diff = abs(time.nanoseconds - transform_time.nanoseconds) / 1e9
             if diff > self.MAX_MESSAGE_DELAY:
-                print(colored(f"Transform is too old! Difference is {diff}. Maximum allowed delay is {self.MAX_MESSAGE_DELAY}.", 'red'))
+                print(colored(f"Transform is too old! Difference is {diff}. Maximum allowed delay is {self.MAX_MESSAGE_DELAY}.", 'red'), flush=True)
                 return None
             
             return self._process_pose(transform_msg)
@@ -398,7 +398,7 @@ def detect_objects(image_rgb: np.ndarray, frame_idx: int, detection_model: Model
     # opencv can't read Path objects...
     blur_score = cv2.Laplacian(image_rgb, cv2.CV_64F).var()
     if blur_score < cfg.blur_threshold:
-        print(colored(f"Frame {frame_idx} is too blurry, skipping...\n" * 10, 'red'))
+        print(colored(f"Frame {frame_idx} is too blurry, skipping...\n" * 10, 'red'), flush=True)
         return None, None
     
     # Convert the numpy array to a PIL Image
@@ -431,7 +431,7 @@ def detect_objects(image_rgb: np.ndarray, frame_idx: int, detection_model: Model
         mask=masks_np,
     )
     if curr_det.xyxy.size == 0:
-        print(f"No detections found for frame {frame_idx}")
+        print(f"No detections found for frame {frame_idx}", flush=True)
         return None, None
 
     image_crops, image_feats_gpu, text_feats = compute_clip_features_batched(
@@ -460,9 +460,14 @@ def detect_objects(image_rgb: np.ndarray, frame_idx: int, detection_model: Model
     return results, curr_det
 
 # A logger for this file
-@hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_stretch")
+# @hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_stretch")
 # @profile
-def main(cfg : DictConfig):
+def main():
+    # Initialize Hydra manually
+    with hydra.initialize(config_path="../hydra_configs", version_base=None):
+        cfg = hydra.compose(config_name="ros_stretch")
+    print(OmegaConf.to_yaml(cfg), flush=True)
+
     logging.getLogger().setLevel(level=logging.INFO)
     tracker = MappingTracker()
     
@@ -505,7 +510,7 @@ def main(cfg : DictConfig):
     prev_adjusted_pose = None
 
     if run_detections:
-        print("\n".join(["Running detections..."] * 10))
+        print("\n".join(["Running detections..."] * 10), flush=True)
         det_exp_path.mkdir(parents=True, exist_ok=True)
 
         ## Initialize the detection models
@@ -521,16 +526,16 @@ def main(cfg : DictConfig):
         detection_model.set_classes(obj_classes.get_classes_arr())
 
         # LLM
-        print("Setting up LLM...")
+        print("Setting up LLM...", flush=True)
         openai_client = get_openai_client()
         if cfg.use_pocd_with_llm:
             llamaClient = LlamaClient(POCD_SYSTEM_PROMPT, max_tokens=20)
             pocd_type_cache = {}
-        print("LLM setup complete.")
+        print("LLM setup complete.", flush=True)
 
         
     else:
-        print("\n".join(["NOT Running detections..."] * 10))
+        print("\n".join(["NOT Running detections..."] * 10), flush=True)
 
     save_hydra_config(cfg, exp_out_path)
     save_hydra_config(detections_exp_cfg, exp_out_path, is_detection_config=True)
@@ -551,13 +556,14 @@ def main(cfg : DictConfig):
     frame_idx = -1
 
     node = Subscriber(cfg=cfg)
-    query_node = QueryServiceProvider(model = clip_model, tokenizer = clip_tokenizer)
+    query_node = QueryServiceProvider(model = clip_model, tokenizer = clip_tokenizer, node=node)
     query_node.attach_objects(objects)
     heatmap_publisher = HeatmapProvider(
         clip_model=clip_model,
         clip_tokenizer=clip_tokenizer,
         object_list=objects,
-        missing_object_list=objects_missing
+        missing_object_list=objects_missing,
+        node=node
     )
 
     while rclpy.ok():
@@ -568,8 +574,6 @@ def main(cfg : DictConfig):
         node.publish_object_point_clouds()
         while not node.is_ready():
             rclpy.spin_once(node, timeout_sec=0)
-            rclpy.spin_once(query_node, timeout_sec=0)
-            rclpy.spin_once(heatmap_publisher, timeout_sec=0)
         node.reset_ready()
 
         local_time = time.time()
@@ -777,7 +781,7 @@ def main(cfg : DictConfig):
                     prompt = f"{c}\n"
                     response, confidence = llamaClient.run_voting(prompt, num_votes=3)
                     response = response.split(".")[0]
-                    print(colored(f"Object: {c}, Response: {response}, Confidence: {confidence}"), 'blue')
+                    print(colored(f"Object: {c}, Response: {response}, Confidence: {confidence}"), 'blue', flush=True)
 
                     object_type = POCDObjectTypes.DYNAMIC.value
                     if response == "semi-static":
@@ -858,7 +862,7 @@ def main(cfg : DictConfig):
                 #         continue
                 #     if objects[ind]['inlier']:
                 #         continue
-                #     print(colored(f"Rejecting detection {detection_list[i]['class_name']} as an outlier\n" * 10, 'magenta'))
+                #     print(colored(f"Rejecting detection {detection_list[i]['class_name']} as an outlier\n" * 10, 'magenta'), flush=True)
                 #     pruned_detection_inds.append(i)
                 # pruned_detection_inds.sort(reverse=True)
                 # for i in pruned_detection_inds:
