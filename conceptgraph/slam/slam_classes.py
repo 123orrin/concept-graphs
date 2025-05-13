@@ -531,10 +531,11 @@ class ProbabilisticMapObjectList(MapObjectList):
         custom_handled += pocd_custom_attributes
 
         # Check for unhandled keys and throw an error if there are
-        all_handled_keys = set(extend_attributes + add_attributes + skip_attributes + custom_handled + pocd_mean_attributes)
-        unhandled_keys = set(self[0].keys()) - all_handled_keys
-        if unhandled_keys:
-            raise ValueError(f"Unhandled keys detected in obj2: {unhandled_keys}. Please update the merge function to handle these attributes.")
+        if len(self) > 0:
+            all_handled_keys = set(extend_attributes + add_attributes + skip_attributes + custom_handled + pocd_mean_attributes)
+            unhandled_keys = set(self[0].keys()) - all_handled_keys
+            if unhandled_keys:
+                raise ValueError(f"Unhandled keys detected in obj2: {unhandled_keys}. Please update the merge function to handle these attributes.")
         
         for d_ind, m_ind in zip(dissapeared_inds, matched_inds):
             if m_ind is None:
@@ -723,10 +724,11 @@ class ProbabilisticMapObjectList(MapObjectList):
         custom_handled += pocd_custom_attributes
 
         # Check for unhandled keys and throw an error if there are
-        all_handled_keys = set(extend_attributes + add_attributes + skip_attributes + custom_handled + pocd_mean_attributes)
-        unhandled_keys = set(self[0].keys()) - all_handled_keys
-        if unhandled_keys:
-            raise ValueError(f"Unhandled keys detected in obj2: {unhandled_keys}. Please update the merge function to handle these attributes.")
+        if len(self) > 0:
+            all_handled_keys = set(extend_attributes + add_attributes + skip_attributes + custom_handled + pocd_mean_attributes)
+            unhandled_keys = set(self[0].keys()) - all_handled_keys
+            if unhandled_keys:
+                raise ValueError(f"Unhandled keys detected in obj2: {unhandled_keys}. Please update the merge function to handle these attributes.")
         
 
         for d_ind, m_ind in enumerate(matches):

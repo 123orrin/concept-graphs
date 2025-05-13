@@ -574,6 +574,16 @@ def main():
         node.publish_object_point_clouds()
         while not node.is_ready():
             rclpy.spin_once(node, timeout_sec=0)
+
+            # Manually initiate heatmap publishing
+            if not hasattr(heatmap_publisher, "_last_update_time"):
+                heatmap_publisher._last_update_time = time.time()
+
+            current_time = time.time()
+            if current_time - heatmap_publisher._last_update_time >= 1:
+                heatmap_publisher.update_callback()
+                heatmap_publisher._last_update_time = current_time
+                print("Updating heatmap...", flush=True)
         node.reset_ready()
 
         local_time = time.time()

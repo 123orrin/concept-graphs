@@ -59,7 +59,7 @@ class HeatmapProvider:
         text_queries_tokenized = self.clip_tokenizer(text_queries).to("cuda")
         self.query_feature_dev = self.clip_model.encode_text(text_queries_tokenized)
 
-        self.get_logger().info(f"Received query: {self.query_text}")
+        self.node.get_logger().info(f"Received query: {self.query_text}")
 
     def update_callback(self) -> None:
         if self.query_text == "":
@@ -160,7 +160,7 @@ class HeatmapProvider:
 
     def _publish_heatmap(self, heatmap: np.ndarray) -> None:
         occupancy_grid = OccupancyGrid()
-        occupancy_grid.header.stamp = self.get_clock().now().to_msg()
+        occupancy_grid.header.stamp = self.node.get_clock().now().to_msg()
         occupancy_grid.header.frame_id = "map"
         occupancy_grid.info.resolution = self.occupancy_info["resolution"]
         occupancy_grid.info.height = heatmap.shape[0]
@@ -177,7 +177,7 @@ class HeatmapProvider:
 
         occupancy_grid.data = heatmap.flatten(order="C").astype(np.int8).tolist()
         self.heatmap_publisher.publish(occupancy_grid)
-        self.get_logger().info("Published heatmap")
+        self.node.get_logger().info("Published heatmap")
 
     def _gaussian_kernel(self, kernel_size_meters: int) -> np.ndarray:
         # Apply a Gaussian kernel to smooth the heatmap
