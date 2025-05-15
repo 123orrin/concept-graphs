@@ -19,7 +19,6 @@ from conceptgraph.llms.base import AbstractLLMClient, AbstractPromptBuilder
 
 default_model_id = "meta-llama/Meta-Llama-3.1-8B"
 
-
 class LlamaClient(AbstractLLMClient):
     def chat_template(self, prompt):
         return f"\nUser: {prompt}Assistant:"
@@ -28,7 +27,8 @@ class LlamaClient(AbstractLLMClient):
         self,
         prompt: Optional[Union[str, AbstractPromptBuilder]],
         model_id: str = None,
-        max_tokens: int = 512,
+        max_tokens: int = 1024,
+        output_validation_function=None,
     ):
         super().__init__(prompt)
         self.max_tokens = max_tokens
@@ -53,6 +53,8 @@ class LlamaClient(AbstractLLMClient):
             device_map="auto",
         )
 
+        self.output_validation_function = output_validation_function
+
     def __call__(self, command: str, max_retries: int=30, verbose: bool = False):
         # return self.pipe(command, max_new_tokens=self.max_tokens)[0]["generated_text"].strip()
         if self.is_first_message():
@@ -66,7 +68,11 @@ class LlamaClient(AbstractLLMClient):
 
         assistant_response, time_taken = self._run_inference(messages)
 
-        is_valid, assistant_response = self._validate_output(assistant_response, command)
+        if self.output_validation_function is not None:
+            is_valid, assistant_response = self.output_validation_function(assistant_response, command)
+        else:
+            is_valid, assistant_response = True, assistant_response
+
         retries = 0
         if not is_valid and retries < max_retries:
             assistant_response, more_time = self._run_inference(messages)
@@ -114,21 +120,6 @@ class LlamaClient(AbstractLLMClient):
         assistant_response = assistant_response.replace("\n", "")
 
         return assistant_response, t1 - t0
-
-    def _validate_output(self, output: str, input_list: list):
-        output_object = output.split('.')[0].strip().lower()
-        if output_object in input_list:
-            return True, output
-        if output_object in ["static", "dynamic", "semi-static", "tatic", "ynamic", "emi-static"]:
-            if output_object == "tatic":
-                output = "static" + "." + output.split('.')[1]
-            if output_object == "ynamic":
-                output = "dynamic" + "." + output.split('.')[1]
-            if output_object == "emi-static":
-                output = "semi-static" + "." + output.split('.')[1]
-            return True, output
-        return False, output
-        
     
     def run_voting(self, command, max_retries: int=30, num_votes: int=3, verbose: bool=False,):
         # Vote on the best response
@@ -146,13 +137,65 @@ class LlamaClient(AbstractLLMClient):
         return response, confidence
         
 
+def validate_output_pocd(self, output: str, input_list: list):
+    output_object = output.split('.')[0].strip().lower()
+    if output_object in input_list:
+        return True, output
+    if output_object in ["static", "dynamic", "semi-static", "tatic", "ynamic", "emi-static"]:
+        if output_object == "tatic":
+            output = "static" + "." + output.split('.')[1]
+        if output_object == "ynamic":
+            output = "dynamic" + "." + output.split('.')[1]
+        if output_object == "emi-static":
+            output = "semi-static" + "." + output.split('.')[1]
+        return True, output
+    return False, output
+
+def validate_output_similarity(self, output: str, input_list: list):
+    output_list = output.split('.')[0].strip()
+    try:
+        # Remove square brackets and split by comma
+        items = output_list.strip("[]").split(",")
+        # Convert to float and check if all are positive
+        numbers = [float(item.strip()) for item in items]
+    except ValueError:
+        print(f"Invalid output: {output_list} - not a list of numbers")
+        return False, output
+    
+    all_positive = all(num > 0 for num in numbers)
+    if not all_positive:
+        print(f"Invalid output: {output_list} - not all positive")
+        return False, output
+        
+    if len(output_list) != len(input_list):
+        print(f"Invalid output: {output_list} - incorrect length")
+        return False, output
+    
+    return True, numbers
+    
+
+
 if __name__ == "__main__":
     from conceptgraph.llms.prompts import HEATMAP_SYSTEM_PROMPT as heatmap_prompt
     from conceptgraph.llms.prompts import POCD_SYSTEM_PROMPT as pocd_prompt
+    from conceptgraph.llms.prompts import OBJECT_SIMILARITY_SYSTEM_PROMPT
+    from conceptgraph.utils.general_utils import ObjectClasses
     system_prompt = heatmap_prompt
     # system_prompt = pocd_prompt
 
-    client = LlamaClient(system_prompt, max_tokens=20)
+    obj_classes = ObjectClasses(
+        classes_file_path='/home/hornylemur/repos/concept-graphs/conceptgraph/scannet200_classes.txt',
+        bg_classes=['wall', 'floor', 'ceiling'],
+        skip_bg=False
+    )
+
+    system_prompt = OBJECT_SIMILARITY_SYSTEM_PROMPT % str(obj_classes.get_classes_arr()).replace("'", "")
+    client = LlamaClient(system_prompt, max_tokens=512)
+
+    def query_similarity_llm():
+        input_str = 'chair'
+        output = client(input_str, verbose=True)
+        print(output)
 
     def query_heatmap_llm(object_query, object_list):
         prompt = 'input list: [' + ', '.join(object_list) + '] input object: '+ object_query + '\n'
@@ -230,6 +273,8 @@ if __name__ == "__main__":
     # test_heatmap()
     # test_pocd()
     # test_pocd_random(trials=5)
-    test_heatmap_random(trials=20)
+    # test_heatmap_random(trials=20)
+
+    query_similarity_llm()
 
     print(client.get_history_as_str())

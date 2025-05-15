@@ -17,11 +17,14 @@ class SimilarityMeasure(Enum):
     SAME_LABEL = 1
 
 class HeatmapProvider:
-    def __init__(self, clip_model, clip_tokenizer, object_list: ProbabilisticMapObjectList, missing_object_list: ProbabilisticMapObjectList, similarity_measure: SimilarityMeasure = SimilarityMeasure.SAME_LABEL, node = None):
+    def __init__(self, clip_model, clip_tokenizer, object_list: ProbabilisticMapObjectList, missing_object_list: ProbabilisticMapObjectList, similarity_measure: SimilarityMeasure = SimilarityMeasure.SAME_LABEL, node = None, llm_client = None):
         if node is None:
             self.node = Node("heatmap_publisher")
         else:
             self.node = node
+
+        if llm_client is None:
+            self.llm_client = None
 
         self.clip_model = clip_model
         self.clip_tokenizer = clip_tokenizer
@@ -54,13 +57,22 @@ class HeatmapProvider:
         self.timer = self.node.create_timer(1, self.update_callback)
 
     def query_callback(self, msg: StringMsg) -> None:
+        if msg.data == self.query_text:
+            self.node.get_logger().info(f"Received unchanged query: {self.query_text}")
+            return
+
         self.query_text = msg.data
 
         text_queries = [self.query_text]
         text_queries_tokenized = self.clip_tokenizer(text_queries).to("cuda")
         self.query_feature_dev = self.clip_model.encode_text(text_queries_tokenized)
 
-        self.node.get_logger().info(f"Received query: {self.query_text}")
+        self.node.get_logger().info(f"Received new query: {self.query_text}")
+        if self.llm_client is not None:
+            self._get_object_relevancy_llm(self.query_text, )
+
+    def _get_object_relevancy_llm(self, text_query: str) -> np.ndarray:
+        pass
 
     def update_callback(self) -> None:
         if self.query_text == "":
@@ -73,6 +85,7 @@ class HeatmapProvider:
         heatmap += heatmap_missing
         if heatmap.sum() > 0:
             heatmap /= np.sum(heatmap)
+            heatmap /= np.max(heatmap)
 
         self._publish_heatmap(heatmap * 255)
         if self.plot_heatmap:
@@ -102,7 +115,7 @@ class HeatmapProvider:
                 self.upper_corner_xy - self.lower_corner_xy
             ) / self.occupancy_info["resolution"]) * self.occupancy_info["resolution"]
 
-    def _get_object_relevancy(
+    def _get_object_relevancy_cosine_similiarity(
         self,
         prior_clip_feature: torch.tensor,
         objects: ProbabilisticMapObjectList,
@@ -130,7 +143,7 @@ class HeatmapProvider:
         return similarity_scores
 
     def _create_heatmap(self, object_list: ProbabilisticMapObjectList, similarity_threshold: float = 0.3) -> np.ndarray:
-        similarity_scores = self._get_object_relevancy(self.query_feature_dev, object_list)
+        similarity_scores = self._get_object_relevancy_cosine_similiarity(self.query_feature_dev, object_list)
 
         heatmap = np.zeros((int(self.occupancy_info['height'] / self.occupancy_info['resolution']), int(self.occupancy_info['width'] / self.occupancy_info['resolution'])))
 
@@ -241,9 +254,9 @@ class HeatmapProvider:
             self.ax.scatter(points[:, 0], points[:, 1], s=2, color=[color], alpha=0.5)
 
         # Plot the heatmap again on top
-        self.ax.pcolor(X, Y, heatmap, cmap='hot', alpha=0.5)
+        self.ax.pcolor(X, Y, heatmap, cmap='hot', alpha=0.3)
         self.ax.set_aspect('equal', adjustable='box')
-        self.ax.set_title("Heatmap")
+        self.ax.set_title("Heatmap for query: " + self.query_text)
         self.ax.set_xlabel("X (m)")
         self.ax.set_ylabel("Y (m)")
 

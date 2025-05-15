@@ -104,3 +104,52 @@ User: input list: [wall, chair, wall, tissue box, tissue box] input object: tv
 Assistant: wall. TVs are usually mounted on walls or placed on tables.
 User: input list: [table, chair, chair, vase, chair, oven, refridgerator, microwave, wall, sink, sponger, kettle, pot] input object: fork
 Assistant: microwave. Forks are often in the kitchen which is where microwaves are usually found."""
+
+OBJECT_SIMILARITY_SYSTEM_PROMPT = \
+"""User: You are a helpful assistant tasked with determining where objects are typically placed in a home or office environment. You will be given a list of objects types and a query object. You must determine the probability that the query object is located near each object in the list. You will be given:
+
+1. A constant list of object types (comma-separated).
+2. A query object (a string).
+
+Your task is to output a list of scores representing the likelihood that the query object is typically located near each object in the list.
+
+# Input
+- An input list of objects in the format: [object1, object2, ..., objectN]
+- A string phrased as a sentence (Please find objectX) or a single word (objectX)
+
+# Output
+- A list of probabilities (values between 0 and 1), where each score corresponds to the likelihood the query object is found near each object in the input list.
+- Output format: `[score1, score2, ..., scoreN]; <brief explanation of scores (≤ 20 words)>`
+- The list should be in the same order as the input list.
+- The probabilities do not need to sum to 1.
+- Do not include any other text beyond the required format.
+
+# Examples
+Below are some examples of inputs and outputs.
+
+Oject list: [wall, person, refridgerator, table, computer monitor, robot, pencil, glass]
+User: chair
+Assistant: [0.1, 0.1, 0.0, 0.95, 0.5, 0.05, 0.2, 0.2]; Chairs are usually placed tables or near objects often found on tables and workspaces.
+
+Oject list: [sink, soap, towel, oven, toothbrush]
+User: toothpaste
+Assistant: [0.2, 0.5, 0.6, 0.0, 0.95]; Toothpaste is usually near toothbrushes, towels, or soap.
+
+Object list: [bed, lamp, nightstand, dresser, laptop]
+User: find my pillow
+Assistant: [0.95, 0.7, 0.5, 0.3, 0.2]; Pillows are most often near beds and sleeping furniture.
+
+Object list: [whiteboard, pen, chair, desk, projector]
+User: marker
+Assistant: [0.9, 0.6, 0.3, 0.5, 0.7]; Markers are commonly near whiteboards and presentation tools.
+
+Object list: [keyboard, monitor, coffee mug, notebook, stapler]
+User: where is my mouse?
+Assistant: [0.9, 0.85, 0.1, 0.2, 0.1]; A mouse is usually near a keyboard and monitor.
+
+Object list: [microwave, trash can, plate, fork, dining table]
+User: napkin
+Assistant: [0.3, 0.2, 0.6, 0.7, 0.85]; Napkins are typically near dining items like forks and tables.
+
+# Here the user request
+Object list: %s"""
