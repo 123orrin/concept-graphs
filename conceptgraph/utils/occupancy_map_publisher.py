@@ -2,7 +2,7 @@ from conceptgraph.occupancygrid.utils import adjust_map_size, world_to_cell
 import rclpy
 import rclpy.duration
 from rclpy.node import Node
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, Image
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
 from tf2_ros.buffer import Buffer
@@ -11,6 +11,11 @@ from tf2_ros import LookupException
 import ros2_numpy
 import tf_transformations
 from geometry_msgs.msg import Pose
+from voxel import VoxelizedPointcloud
+import torch
+from sensor_msgs.msg import PointCloud2
+import ros2_numpy
+
 
 
 class OccupancyMapPublisher(Node):
@@ -28,12 +33,20 @@ class OccupancyMapPublisher(Node):
         self.floor_height = self._get_robot_base_z() + 0.05
         self.robot_height = self.floor_height + 1.8
 
+
         self.subscription = self.create_subscription(
             PointCloud2,
             "/spectacular_ai/point_cloud/local",
             self._point_cloud_callback,
             1,
         )
+        self.subscription_map = self.create_subscription(
+            PointCloud2,
+            "/spectacular_ai/map",
+            self._map_callback,
+            1,
+        )
+
         self.points = None
         self.point_receive_time = None
         self.points_updated = False
@@ -42,7 +55,13 @@ class OccupancyMapPublisher(Node):
         self.upper_corner_xy = np.array((0.5, 0.5))
         self.corners_updated = True
 
+
+        self.global_map = None
+
         self.publisher = self.create_publisher(OccupancyGrid, "/occupancy_map", 10)
+        self.global_pointcloud_publisher = self.create_publisher(
+            PointCloud2, "/global_pointcloud", 10
+        )
         self.occupancy_info = {
             "resolution": 0.05,  # meters per pixel
             "width": (self.upper_corner_xy - self.lower_corner_xy)[0],  # meters
@@ -58,10 +77,48 @@ class OccupancyMapPublisher(Node):
             -1,
             dtype=np.int8,
         )
-
+        self.global_vox = VoxelizedPointcloud(voxel_size=0.1)
         self.get_logger().info(
             f"Occupancy Map Publisher Node has been started. Using robot base height: {self.floor_height}"
         )
+
+    def _publish_global_pc(self):
+        """       
+        Publishes the global voxelized point cloud as a PointCloud2 message.
+        # Retrieve the global voxelized point cloud
+        points = self.global_vox.get_pointcloud()[0].cpu().numpy()  # Shape: (N, 3)
+
+        # Ensure the points array has the correct structured dtype
+        structured_points = np.zeros(points.shape[0], dtype=[
+            ('x', np.float32),
+            ('y', np.float32),
+            ('z', np.float32)
+        ])
+        structured_points['x'] = points[:, 0]
+        structured_points['y'] = points[:, 1]
+        structured_points['z'] = points[:, 2]
+
+        # Create a PointCloud2 message
+        pointcloud_msg = ros2_numpy.msgify(PointCloud2, structured_points, frame_id="map")
+
+        # Publish the PointCloud2 message
+        self.global_pointcloud_publisher.publish(pointcloud_msg)"""
+
+        points = self.global_vox.get_pointcloud()[0].cpu().numpy()  # Shape: (N, 3)
+        # Ensure the points array has the correct structured dtype
+        structured_points = np.zeros(points.shape[0], dtype=[
+            ('x', np.float32),
+            ('y', np.float32),
+            ('z', np.float32)
+        ])
+        structured_points['x'] = points[:, 0]
+        structured_points['y'] = points[:, 1]
+        structured_points['z'] = points[:, 2]
+        # Create a PointCloud2 message
+        pointcloud_msg = ros2_numpy.msgify(PointCloud2, structured_points, frame_id="map")
+        # Publish the PointCloud2 message
+        self.global_pointcloud_publisher.publish(pointcloud_msg)
+
 
     def _get_robot_base_z(self):
         req_time = rclpy.time.Time()
@@ -81,7 +138,7 @@ class OccupancyMapPublisher(Node):
         tf = self.tf_buffer.lookup_transform("map", "base_link", req_time)
         return tf.transform.translation.z
 
-    def _point_cloud_callback(self, msg):
+    def _point_cloud_callback(self, msg, color_msg=None):
         # only update when last message was used
         if not self.points_updated:
             # Convert PointCloud2 to numpy array
@@ -96,13 +153,23 @@ class OccupancyMapPublisher(Node):
                 self.upper_corner_xy = np.maximum(point_bounds_max, self.upper_corner_xy + self.margin)
                 self.corners_updated = True
 
+    def _map_callback(self, msg):
+        self.global_map = ros2_numpy.point_cloud2.pointcloud2_to_xyz_array(msg).T
+
     def _ready(self):
-        return self.points_updated and self.tf_buffer.can_transform(
-            "map",
-            "camera_color_optical_frame",
-            self.point_receive_time,
-            timeout=rclpy.duration.Duration(seconds=0.05),
-        )
+        if not self.points_updated:
+            return False
+        else:
+            t =self.tf_buffer.can_transform(
+                    "map",
+                    "camera_color_optical_frame",
+                    self.point_receive_time,
+                    timeout=rclpy.duration.Duration(seconds=0.2),
+                    return_debug_tuple=True
+                )
+            if t[0]:
+                return True
+            return False
 
     def _publish_map(self, map: np.ndarray):
         occupancy_grid = OccupancyGrid()
@@ -140,6 +207,7 @@ class OccupancyMapPublisher(Node):
             upper_corner_xy,
         )
 
+
     def main(self):
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -164,6 +232,14 @@ class OccupancyMapPublisher(Node):
             points = (
                 tf_matrix @ np.vstack((self.points, np.ones((1, self.points.shape[1]))))
             )[:3, :].T
+            
+            # Convert points to a PyTorch tensor
+            points = torch.tensor(points, dtype=torch.float32, device='cpu')
+            self.global_vox.add(points,None,None)
+
+            points = self.global_vox.get_pointcloud()[0]
+            points = points.cpu().numpy()
+
 
             # update map size if needed
             if self.corners_updated:
@@ -177,6 +253,7 @@ class OccupancyMapPublisher(Node):
             )
 
             occupied = (points[:, 2] > self.floor_height) & (points[:, 2] < self.robot_height)
+
             inside_map = (cells[:, 0] >= 0) & (cells[:, 0] < self.occupancy.shape[1]) & (cells[:, 1] >= 0) & (cells[:, 1] < self.occupancy.shape[0])
             occupied_cells = cells[np.logical_and(occupied, inside_map), :]
             unoccupied_cells = cells[np.logical_and(np.logical_not(occupied), inside_map), :]
@@ -187,6 +264,8 @@ class OccupancyMapPublisher(Node):
             self.get_logger().info("Occupancy map published.")
             self._publish_map(self.occupancy)
 
+            self._publish_global_pc()
+            self.get_logger().info("Global point cloud published.")
 
 def main(args=None):
     rclpy.init(args=args)
