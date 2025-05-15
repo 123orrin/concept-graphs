@@ -105,7 +105,7 @@ Assistant: wall. TVs are usually mounted on walls or placed on tables.
 User: input list: [table, chair, chair, vase, chair, oven, refridgerator, microwave, wall, sink, sponger, kettle, pot] input object: fork
 Assistant: microwave. Forks are often in the kitchen which is where microwaves are usually found."""
 
-OBJECT_SIMILARITY_SYSTEM_PROMPT = \
+OBJECT_SIMILARITY_SYSTEM_PROMPT_OLD = \
 """User: You are a helpful assistant tasked with determining where objects are typically placed in a home or office environment. You will be given a list of objects types and a query object. You must determine the probability that the query object is located near each object in the list. You will be given:
 
 1. A constant list of object types (comma-separated).
@@ -153,3 +153,53 @@ Assistant: [0.3, 0.2, 0.6, 0.7, 0.85]; Napkins are typically near dining items l
 
 # Here the user request
 Object list: %s"""
+
+OBJECT_SIMILARITY_PROMPT_SYSTEM = \
+"""
+You are an intelligent assistant for robot-human interaction.
+"""
+
+OBJECT_SIMILARITY_PROMPT_USER = \
+"""
+Your task is to estimate how likely it is that two given objects are typically located near each other in everyday human environments (such as homes, offices, or workshops).
+
+You will be given two objects, each represented by a single word. Respond with a single integer from 0 to 100, where:
+
+0 means extremely unlikely to be found near each other,
+
+100 means almost always found near each other.
+
+Then, in one short sentence, explain your reasoning based on typical spatial arrangements in human environments.
+
+Example:
+keyboard; monitor
+
+In this case, you should output: 95. Keyboards are commonly placed directly in front of monitors on desks.
+
+Example:
+toothbrush; refrigerator
+In this case, you should output: 5. These items are found in separate rooms—bathroom and kitchen, respectively.
+
+Example:
+mug; coffee_machine
+
+In this case, you should output: 90. Mugs are typically kept near coffee machines for convenience.
+
+Done examples.
+
+stapler; printer"""
+
+OBJECT_SIMILARITY_PROMPT_ASSISTANT = \
+"""70. Staplers are often kept near printers in office settings for assembling printed documents."""
+
+
+def object_similarity_prompt(object_1: str, object_2: str) -> str:
+    return f"{object_1}; {object_2}"
+
+def process_similarity_response(response: str) -> tuple:
+    try:
+        score_str, explanation = response.split('.', 1)
+        score = int(score_str.strip())
+        return score, explanation.strip()
+    except ValueError:
+        return None, response
