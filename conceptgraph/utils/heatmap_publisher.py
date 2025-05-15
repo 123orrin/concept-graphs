@@ -6,6 +6,7 @@ from rclpy.node import Node
 from std_msgs.msg import String as StringMsg
 from nav_msgs.msg import OccupancyGrid
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 from conceptgraph.slam.slam_classes import ProbabilisticMapObjectList
 from conceptgraph.occupancygrid.utils import world_to_cell
@@ -67,19 +68,20 @@ class HeatmapProvider:
 
         # Create a heatmap from the object list
         self._update_map_size()
-        heatmap = self._create_heatmap(self.object_list)
-        heatmap += self._create_heatmap(self.missing_object_list)
+        heatmap, object_similarity_scores = self._create_heatmap(self.object_list)
+        heatmap_missing, missing_object_similarity = self._create_heatmap(self.missing_object_list)
+        heatmap += heatmap_missing
         if heatmap.sum() > 0:
             heatmap /= np.sum(heatmap)
 
         self._publish_heatmap(heatmap * 255)
         if self.plot_heatmap:
-            self._plot_heatmap(heatmap)
+            self._plot_heatmap(heatmap, object_similarity_scores, missing_object_similarity)
 
     def _update_map_size(
         self,
     ):
-        if len(self.object_list) == 0:
+        if len(self.object_list) == 0:  
             return
         points = np.vstack(
             [np.vstack(obj["centroid_locations"])[:, :2] for obj in self.object_list]
@@ -156,7 +158,7 @@ class HeatmapProvider:
         if heatmap.sum() > 0:
             heatmap /= np.sum(heatmap)
 
-        return heatmap
+        return heatmap, similarity_scores
 
     def _publish_heatmap(self, heatmap: np.ndarray) -> None:
         occupancy_grid = OccupancyGrid()
@@ -201,7 +203,7 @@ class HeatmapProvider:
         self.ax.set_xlabel("X (cells)")
         self.ax.set_ylabel("Y (cells)")
     
-    def _plot_heatmap(self, heatmap: np.ndarray):
+    def _plot_heatmap(self, heatmap: np.ndarray, similarity_scores: np.ndarray, similarity_scores_missing: np.ndarray) -> None:
         if not self.plot_heatmap:
             return
 
@@ -209,19 +211,40 @@ class HeatmapProvider:
             self._init_heatmap_plot()
 
         self.ax.clear()
-        self.ax.imshow(heatmap, cmap='hot', interpolation='nearest')
-        self.ax.yaxis.set_inverted(False)
+
+        # Create a meshgrid for the heatmap and plot it
+        X, Y = np.meshgrid(
+            np.arange(0, heatmap.shape[1]) * self.occupancy_info["resolution"] + self.occupancy_info["origin"][0],
+            np.arange(0, heatmap.shape[0]) * self.occupancy_info["resolution"] + self.occupancy_info["origin"][1],
+        )
+        self.ax.pcolor(X, Y, heatmap, cmap='hot')
+
+        # Normalize the similarity scores to [0, 1]
+        sims = np.concatenate([similarity_scores, similarity_scores_missing])
+        if len(sims) == 0 or np.max(sims) == 0:
+            max_sim = 1
+        else:
+            max_sim = np.max(sims)
+
+        # Project the point clouds to 2D and plot them
+        cmap = cm.get_cmap('coolwarm')
+        for obj, sim in zip(self.object_list, similarity_scores):
+            points = np.asarray(obj['pcd'].points)[:, :2]
+            norm_sim = sim / max_sim
+            color = cmap(norm_sim)
+            self.ax.scatter(points[:, 0], points[:, 1], s=2, color=[color], alpha=0.5)
+        
+        for obj, sim in zip(self.missing_object_list, similarity_scores_missing):
+            points = np.asarray(obj['pcd'].points)[:, :2]
+            norm_sim = sim / max_sim
+            color = cmap(norm_sim)
+            self.ax.scatter(points[:, 0], points[:, 1], s=2, color=[color], alpha=0.5)
+
+        # Plot the heatmap again on top
+        self.ax.pcolor(X, Y, heatmap, cmap='hot', alpha=0.5)
+        self.ax.set_aspect('equal', adjustable='box')
         self.ax.set_title("Heatmap")
         self.ax.set_xlabel("X (m)")
         self.ax.set_ylabel("Y (m)")
-        
-        x_ticks = np.arange(0, heatmap.shape[1], step=int(heatmap.shape[1] / 5) + 1)
-        y_ticks = np.arange(0, heatmap.shape[0], step=int(heatmap.shape[0] / 5) + 1)
-        x_labels = (x_ticks * self.occupancy_info["resolution"] + self.occupancy_info["origin"][0]).round(2)
-        y_labels = (y_ticks * self.occupancy_info["resolution"] + self.occupancy_info["origin"][1]).round(2)
-        self.ax.set_xticks(x_ticks)
-        self.ax.set_xticklabels(x_labels)
-        self.ax.set_yticks(y_ticks)
-        self.ax.set_yticklabels(y_labels)
 
         plt.pause(0.01)

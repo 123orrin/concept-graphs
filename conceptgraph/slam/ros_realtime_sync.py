@@ -825,7 +825,7 @@ def main():
                 to_remove.update(pruned_object_inds)
 
                 # Removed objects are now "missing"
-                objects_missing += [objects[i] for i in to_remove]
+                # objects_missing += [objects[i] for i in to_remove]
 
                 # Translate expected objects based on POCD.
                 # When an expected object has low enough pocd score, consider that it might moved farther
@@ -844,7 +844,7 @@ def main():
                 to_remove = [i for i in list(to_remove) if i is not None]
                 to_remove.sort(reverse=True)
                 for ind in to_remove:
-                    # objects_missing.append(objects[ind]) # why are objects which were merged added here?
+                    objects_missing.append(objects[ind]) # why are objects which were merged added here?
                     objects.pop(ind)
                     locations_in_list = []
 
