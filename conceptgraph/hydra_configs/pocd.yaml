@@ -4,7 +4,7 @@ defaults:
 use_pocd: !!bool True
 
 use_pocd_with_llm: !!bool False
-use_similarity_with_llm: !!bool False
+use_similarity_with_llm: !!bool True
 llm_model_id: "meta-llama/Meta-Llama-3.1-8B-Instruct" # ["google/gemma-2b-it", "meta-llama/Meta-Llama-3.1-8B-Instruct"]
 
 pocd_default_change: 20 # Metres

@@ -20,6 +20,8 @@ import torch.nn.functional as F
 import faiss
 import uuid
 
+from scipy.spatial import ConvexHull
+
 from conceptgraph.slam.slam_classes import MapEdgeMapping, ProbabilisticMapObjectList, DetectionList, to_tensor, POCDObjectTypes
 
 from conceptgraph.utils.ious import compute_3d_iou, compute_3d_iou_accurate_batch, compute_iou_batch
@@ -292,7 +294,7 @@ def merge_obj2_into_obj1(obj1, obj2, downsample_voxel_size, dbscan_remove_noise,
     tracker.track_merge(obj1, obj2)
     
     # Attributes to be explicitly handled
-    extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number', 'centroid_locations']
+    extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number', 'centroid_locations', 'bbox_shadow_hull_history']
     add_attributes = ['num_detections', 'num_obj_in_class']
     skip_attributes = ['id', 'class_name', 'is_background', 'new_counter', 'curr_obj_num', 'inst_color']  # 'inst_color' just keeps obj1's
     pocd_skip_attributes = ['confidence_history', 'first_observed_time', 'last_observed_time', 'pocd_confidence', 'age', 'lost_time', 'a', 'b', 'mu', 'sig', 'eps', 'inlier', 'type']
@@ -1070,7 +1072,11 @@ def make_detection_list_from_pcd_and_gobs(
         # print(f"Line 937, tracker.total_object_count INCREMENTED: {tracker.total_object_count }")
         num_obj_in_class = tracker.curr_class_count[curr_class_name]
         
-        
+        # compute the 2D shadow of the 3D bounding box (used for heatmap)
+        bbox_points_xy = np.asarray(obj_pcds_and_bboxes[mask_idx]['bbox'].get_box_points())[:, :2]
+        hull = ConvexHull(bbox_points_xy)
+        shadow_polygon = bbox_points_xy[hull.vertices]
+
         detected_object = {
             'first_observed_time': time_stamp,
             'last_observed_time': -1,
@@ -1113,6 +1119,7 @@ def make_detection_list_from_pcd_and_gobs(
             'curr_obj_num': tracker.total_object_count,
             'new_counter' : tracker.brand_new_counter,
             'centroid_locations': [obj_pcds_and_bboxes[mask_idx]['pcd'].get_center()],
+            'bbox_shadow_hull_history': [shadow_polygon],
         }
         # detected_object['curr_obj_num']
         # print(f"Line 969, detected_object['image_idx']: {detected_object['image_idx']}")

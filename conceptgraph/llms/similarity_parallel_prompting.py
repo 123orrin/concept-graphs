@@ -3,22 +3,24 @@ import asyncio
 from openai import AsyncOpenAI
 from conceptgraph.llms.prompts import OBJECT_SIMILARITY_PROMPT_SYSTEM, OBJECT_SIMILARITY_PROMPT_USER, OBJECT_SIMILARITY_PROMPT_ASSISTANT, object_similarity_prompt, process_similarity_response
 from conceptgraph.utils.general_utils import ObjectClasses
+from joblib import Memory
 
 
-class OpenAIAsyncClient:
+class SimilarityOpenAIAsyncClient:
+    memory = Memory(location='__similarity_cache__', verbose=0)
+    client = AsyncOpenAI()
 
     def __init__(self, object_list):
-        self.client = AsyncOpenAI()
         if len(object_list) == 0:
             raise ValueError("The object list is empty.")
         self.object_list = object_list
 
-    async def semantic_similarity_request(self, object_1: str, object_2: str):
+    async def semantic_similarity_request(object_1: str, object_2: str):
         if ';' in object_1 or ';' in object_2:
             raise ValueError("Input objects should not contain semicolons.")
 
         async def semantic_similarity():
-            completion = await self.client.chat.completions.create(
+            completion = await SimilarityOpenAIAsyncClient.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {"role": "developer", "content": OBJECT_SIMILARITY_PROMPT_SYSTEM},
@@ -35,8 +37,8 @@ class OpenAIAsyncClient:
 
         return await semantic_similarity()
 
-    async def _query_semantic_similarity_parallel(self, object_list, query_object: str, debug=False):
-        query_tasks = [self.semantic_similarity_request(o, query_object) for o in object_list]
+    async def _query_semantic_similarity_parallel(object_list, query_object: str, debug=False):
+        query_tasks = [SimilarityOpenAIAsyncClient.semantic_similarity_request(o, query_object) for o in object_list]
         results = await asyncio.gather(*query_tasks)
 
         results_scores = [result[0] for result in results]
@@ -57,20 +59,24 @@ class OpenAIAsyncClient:
 
         return results_scores, results_reasons
 
-    def query_semantic_similarity(self, query_object: str, debug=False):
+    @memory.cache
+    def _query_semantic_similarity_cached(object_list: list, query_object: str, debug=False):
         if len(query_object) == 0:
             raise ValueError("The query object is empty.")
 
-        result_scores, result_reasons = asyncio.run(self._query_semantic_similarity_parallel(self.object_list, query_object, debug=debug))
+        result_scores, result_reasons = asyncio.run(SimilarityOpenAIAsyncClient._query_semantic_similarity_parallel(object_list, query_object, debug=debug))
 
         # Replace None in result_scores with 0 and print a warning
         for i, (score, response) in enumerate(zip(result_scores, result_reasons)):
             if score is None:
                 result_scores[i] = 0
-                print(f"Score was None. Object: '{self.object_list[i]}'. Reason: '{response}'")
+                print(f"Score was None. Object: '{object_list[i]}'. Reason: '{response}'")
             result_scores[i] /= 100.0
 
         return result_scores
+
+    def query_semantic_similarity(self, query_object: str, debug=False):
+        return SimilarityOpenAIAsyncClient._query_semantic_similarity_cached(self.object_list, query_object, debug=debug)
 
 
 # Example usage
@@ -83,8 +89,18 @@ def main():
     object_list = obj_classes.get_classes_arr()
     print(object_list)
 
-    client = OpenAIAsyncClient(object_list)
+    client = SimilarityOpenAIAsyncClient(object_list)
+
+    start_time = time.time()
     similarities = client.query_semantic_similarity("chair", True)
+    elapsed_time = time.time() - start_time
+    print(f"Elapsed time for query_semantic_similarity: {elapsed_time} seconds")
+
+    start_time = time.time()
+    similarities = client.query_semantic_similarity("chair", True)
+    elapsed_time = time.time() - start_time
+    print(f"Elapsed time for query_semantic_similarity: {elapsed_time} seconds")
+
     print(similarities)
 
 if __name__ == "__main__":

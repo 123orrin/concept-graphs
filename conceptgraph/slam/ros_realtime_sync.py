@@ -94,10 +94,9 @@ from conceptgraph.utils.general_utils import get_vis_out_path, cfg_to_dict, chec
 from conceptgraph.dataset.conceptgraphs_datautils import scale_intrinsics
 from conceptgraph.occupancygrid.utils import add_objects_to_occupancy_grid, dilate_map, show_occupancy_grid
 from conceptgraph.llms.llama_client import LlamaClient, validate_output_pocd, validate_output_similarity
-from conceptgraph.llms.prompts import POCD_SYSTEM_PROMPT, HEATMAP_SYSTEM_PROMPT, OBJECT_SIMILARITY_SYSTEM_PROMPT_OLD
+from conceptgraph.llms.prompts import POCD_SYSTEM_PROMPT
 from conceptgraph.utils.query_service_provider import QueryServiceProvider
-from conceptgraph.utils.heatmap_publisher import HeatmapProvider
-
+from conceptgraph.utils.heatmap_publisher import HeatmapProvider, SimilarityMeasure
 
 
 from ultralytics.engine.model import Model
@@ -532,12 +531,8 @@ def main():
         if cfg.use_pocd_with_llm:
             llamaClient = LlamaClient(POCD_SYSTEM_PROMPT, max_tokens=20, output_validation_function=validate_output_pocd)
             pocd_type_cache = {}
-        llamaClient_similarity = None
-        if cfg.use_similarity_with_llm:
-            llamaClient_similarity = LlamaClient(OBJECT_SIMILARITY_SYSTEM_PROMPT_OLD % obj_classes.get_classes_arr(), max_tokens=20, output_validation_function=validate_output_similarity)
         print("LLM setup complete.", flush=True)
 
-        
     else:
         print("\n".join(["NOT Running detections..."] * 10), flush=True)
 
@@ -568,7 +563,8 @@ def main():
         object_list=objects,
         missing_object_list=objects_missing,
         node=node,
-        llm_client=llamaClient_similarity,
+        similarity_measure= SimilarityMeasure.SEMANTIC_LLM if cfg.use_similarity_with_llm else SimilarityMeasure.SAME_LABEL,
+        obj_classes=obj_classes.get_classes_arr(),
     )
 
     while rclpy.ok():

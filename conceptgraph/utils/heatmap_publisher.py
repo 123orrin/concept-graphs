@@ -11,32 +11,41 @@ import matplotlib.cm as cm
 from conceptgraph.slam.slam_classes import ProbabilisticMapObjectList
 from conceptgraph.occupancygrid.utils import world_to_cell
 from geometry_msgs.msg import Pose
+from conceptgraph.llms.similarity_parallel_prompting import SimilarityOpenAIAsyncClient
+from cv2 import fillPoly
 
 class SimilarityMeasure(Enum):
     COSINE = 0
     SAME_LABEL = 1
+    SEMANTIC_LLM = 2
 
 class HeatmapProvider:
-    def __init__(self, clip_model, clip_tokenizer, object_list: ProbabilisticMapObjectList, missing_object_list: ProbabilisticMapObjectList, similarity_measure: SimilarityMeasure = SimilarityMeasure.SAME_LABEL, node = None, llm_client = None):
+    def __init__(self, clip_model, clip_tokenizer, object_list: ProbabilisticMapObjectList, missing_object_list: ProbabilisticMapObjectList, similarity_measure: SimilarityMeasure = SimilarityMeasure.SAME_LABEL, node = None, obj_classes: list = None):
         if node is None:
             self.node = Node("heatmap_publisher")
         else:
             self.node = node
 
-        if llm_client is None:
-            self.llm_client = None
+        self.use_bounding_boxes = True
+        if similarity_measure == SimilarityMeasure.SEMANTIC_LLM and obj_classes is None:
+            raise ValueError("Object classes must be provided when using LLM similarity.")
+        if similarity_measure == SimilarityMeasure.SEMANTIC_LLM:
+            self.llm_client = SimilarityOpenAIAsyncClient(obj_classes)
+            self.obj_classes = obj_classes
+            self.obj_classes_similarity = {obj_classes[i]: 0 for i in range(len(obj_classes))}
+        elif similarity_measure == SimilarityMeasure.COSINE:
+            self.device = "cuda"
+            self.query_feature_dev = None
+            self.clip_model = clip_model
+            self.clip_tokenizer = clip_tokenizer
 
-        self.clip_model = clip_model
-        self.clip_tokenizer = clip_tokenizer
         self.object_list = object_list
         self.missing_object_list = missing_object_list
 
-        self.device = "cuda"
         self.similarity_measure = similarity_measure
         self.plot_heatmap = True
 
         self.query_text = ""
-        self.query_feature_dev = None
         self.query_subscription = self.node.create_subscription(
             StringMsg, "heatmap_goal", self.query_callback, 1
         )
@@ -63,16 +72,18 @@ class HeatmapProvider:
 
         self.query_text = msg.data
 
-        text_queries = [self.query_text]
-        text_queries_tokenized = self.clip_tokenizer(text_queries).to("cuda")
-        self.query_feature_dev = self.clip_model.encode_text(text_queries_tokenized)
-
         self.node.get_logger().info(f"Received new query: {self.query_text}")
-        if self.llm_client is not None:
+        if self.similarity_measure == SimilarityMeasure.SEMANTIC_LLM:
             self._get_object_relevancy_llm(self.query_text, )
+        elif self.similarity_measure == SimilarityMeasure.COSINE:
+            text_queries = [self.query_text]
+            text_queries_tokenized = self.clip_tokenizer(text_queries).to("cuda")
+            self.query_feature_dev = self.clip_model.encode_text(text_queries_tokenized)
 
     def _get_object_relevancy_llm(self, text_query: str) -> np.ndarray:
-        pass
+        self.node.get_logger().info(f"Query semantic similarity")
+        similarity = self.llm_client.query_semantic_similarity(text_query)
+        self.obj_classes_similarity = {key: similarity[i] for i, key in enumerate(self.obj_classes)}
 
     def update_callback(self) -> None:
         if self.query_text == "":
@@ -80,12 +91,15 @@ class HeatmapProvider:
 
         # Create a heatmap from the object list
         self._update_map_size()
-        heatmap, object_similarity_scores = self._create_heatmap(self.object_list)
-        heatmap_missing, missing_object_similarity = self._create_heatmap(self.missing_object_list)
+        heatmap, object_similarity_scores = self._create_heatmap_unnormalized(self.object_list)
+        heatmap_missing, missing_object_similarity = self._create_heatmap_unnormalized(self.missing_object_list)
         heatmap += heatmap_missing
         if heatmap.sum() > 0:
             heatmap /= np.sum(heatmap)
-            heatmap /= np.max(heatmap)
+            # We skip the area normalization for now as this makes the values could make
+            # the values too small for integer representation (which is needed for occupancy grid)
+            # area = np.size(heatmap) * self.occupancy_info["resolution"]**2
+            # heatmap /= area
 
         self._publish_heatmap(heatmap * 255)
         if self.plot_heatmap:
@@ -97,7 +111,7 @@ class HeatmapProvider:
         if len(self.object_list) == 0:  
             return
         points = np.vstack(
-            [np.vstack(obj["centroid_locations"])[:, :2] for obj in self.object_list]
+            [np.vstack([hull for hull in obj['bbox_shadow_hull_history']]) for obj in self.object_list]
         )
         point_bounds_min = np.min(points, axis=0)
         point_bounds_max = np.max(points, axis=0)
@@ -115,9 +129,21 @@ class HeatmapProvider:
                 self.upper_corner_xy - self.lower_corner_xy
             ) / self.occupancy_info["resolution"]) * self.occupancy_info["resolution"]
 
+    def _get_object_relevancy_same_label(
+            self,
+            query_text: str,
+            objects: ProbabilisticMapObjectList
+        ) -> np.ndarray:
+        if len(objects) == 0:
+            return np.empty((0))
+
+        similarity_scores = np.zeros(len(objects))
+        mask = [o["class_name"] == query_text for o in objects]
+        similarity_scores[mask] = 1
+        return similarity_scores
+
     def _get_object_relevancy_cosine_similiarity(
-        self,
-        prior_clip_feature: torch.tensor,
+        query_feature_dev: torch.tensor,
         objects: ProbabilisticMapObjectList,
     ) -> torch.tensor:
         """
@@ -126,40 +152,41 @@ class HeatmapProvider:
         if len(objects) == 0:
             return np.empty((0))
 
-        if self.similarity_measure == SimilarityMeasure.SAME_LABEL:
-            similarity_scores = np.zeros(len(objects))
-            mask = [o["class_name"] == self.query_text for o in objects]
-            similarity_scores[mask] = 1
+        objects_clip_fts = objects.get_stacked_values_torch("clip_ft")
+        objects_clip_fts = objects_clip_fts.to("cuda")
+        similarity_scores = F.cosine_similarity(query_feature_dev, objects_clip_fts, dim=1)
+        return  similarity_scores.cpu().numpy()
 
+    def _create_heatmap_unnormalized(self, object_list: ProbabilisticMapObjectList, similarity_threshold: float = 0.3) -> np.ndarray:
+        if self.similarity_measure == SimilarityMeasure.SEMANTIC_LLM:
+            similarity_scores = np.array([self.obj_classes_similarity[obj["class_name"]] for obj in object_list])
+        elif self.similarity_measure == SimilarityMeasure.SAME_LABEL:
+            similarity_scores = self._get_object_relevancy_same_label(self.query_text, object_list)
         elif self.similarity_measure == SimilarityMeasure.COSINE:
-            objects_clip_fts = objects.get_stacked_values_torch("clip_ft")
-            objects_clip_fts = objects_clip_fts.to("cuda")
-            similarity_scores = F.cosine_similarity(prior_clip_feature, objects_clip_fts, dim=1)
-            similarity_scores = similarity_scores.cpu().numpy()
-
+            similarity_scores = self._get_object_relevancy_cosine_similiarity(self.query_feature_dev, object_list)
         else:
             raise ValueError("Invalid similarity measure")
-        
-        return similarity_scores
-
-    def _create_heatmap(self, object_list: ProbabilisticMapObjectList, similarity_threshold: float = 0.3) -> np.ndarray:
-        similarity_scores = self._get_object_relevancy_cosine_similiarity(self.query_feature_dev, object_list)
 
         heatmap = np.zeros((int(self.occupancy_info['height'] / self.occupancy_info['resolution']), int(self.occupancy_info['width'] / self.occupancy_info['resolution'])))
 
         kernel = self._gaussian_kernel(0.4)
-
         for obj, sim in zip(object_list, similarity_scores):
             if sim > similarity_threshold:
-                centroids = np.vstack(obj['centroid_locations'])[:,:2]
-                centroids = world_to_cell(centroids, self.occupancy_info["origin"], self.occupancy_info["resolution"])
+                obj_heatmap = np.zeros_like(heatmap)
+                if self.use_bounding_boxes:
+                    for bbox_shadow_hull_history in obj['bbox_shadow_hull_history']:
+                        shadow_polygon_cell = world_to_cell(bbox_shadow_hull_history, self.occupancy_info["origin"], self.occupancy_info["resolution"])
+                        obj_heatmap += fillPoly(np.zeros_like(heatmap), [shadow_polygon_cell], color=1)
 
-                # remove centroids outside the grid
-                centroids = centroids[(centroids[:, 0] >= 0) & (centroids[:, 0] < heatmap.shape[1]) & (centroids[:, 1] >= 0) & (centroids[:, 1] < heatmap.shape[0])]
+                else:
+                    centroids = np.vstack(obj['centroid_locations'])[:,:2]
+                    centroids = world_to_cell(centroids, self.occupancy_info["origin"], self.occupancy_info["resolution"])
 
-                obj_heatmap = np.zeros(heatmap.shape)
-                unique_centroids, counts_centroids = np.unique(centroids, axis=0, return_counts=True)
-                obj_heatmap[unique_centroids[:, 1], unique_centroids[:, 0]] = counts_centroids
+                    # remove centroids outside the grid
+                    centroids = centroids[(centroids[:, 0] >= 0) & (centroids[:, 0] < heatmap.shape[1]) & (centroids[:, 1] >= 0) & (centroids[:, 1] < heatmap.shape[0])]
+
+                    unique_centroids, counts_centroids = np.unique(centroids, axis=0, return_counts=True)
+                    obj_heatmap[unique_centroids[:, 1], unique_centroids[:, 0]] = counts_centroids
 
                 heatmap += obj_heatmap * sim
 
@@ -168,8 +195,6 @@ class HeatmapProvider:
             torch.tensor(kernel, dtype=torch.float32).unsqueeze(0).unsqueeze(0),
             padding='same'
         ).squeeze().numpy()
-        if heatmap.sum() > 0:
-            heatmap /= np.sum(heatmap)
 
         return heatmap, similarity_scores
 
