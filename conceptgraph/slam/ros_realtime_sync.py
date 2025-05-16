@@ -458,6 +458,27 @@ def detect_objects(image_rgb: np.ndarray, frame_idx: int, detection_model: Model
 
     return results, curr_det
 
+def update_detection_matches_from_merged_objects(detection_matches_inds, target_object_indices, source_object_indices):
+    """
+    The list target_object_indices and source_object_indices are of equal length and correspond to each other.
+        source_object_indices[i] becomes/is to be merged into target_object_indices[i]
+
+    Update the entries in detection_matches_inds which are equal to source_object_indices[i] to target_object_indices[i]
+    """
+
+    # Update the detections which were matched to the possibly translated objects
+
+    detection_matches_inds = np.array(detection_matches_inds)
+    for old_translated_ind, new_merged_ind in zip(target_object_indices, source_object_indices):
+        # check if the merged object was matched to an older object
+        if new_merged_ind is None:
+            continue
+        # check if the merged object was detected in this frame
+        # and update reference to the old object
+        detection_matches_inds[detection_matches_inds == new_merged_ind] = old_translated_ind
+    return list(detection_matches_inds)
+
+
 # A logger for this file
 # @hydra.main(version_base=None, config_path="../hydra_configs/", config_name="ros_stretch")
 # @profile
@@ -728,8 +749,8 @@ def main():
                 change_list = [cfg.pocd_default_change] * len(expected_inds)
                 change_std_list = [cfg.pocd_default_change_std] * len(expected_inds)
                 objects.updateProbability(change_list=change_list, std_change_list=change_std_list, ids=expected_ids, cap=cfg.pocd_response)
-                pruned_object_inds, _ = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
-                objects.removeObjectsByIndex(pruned_object_inds)
+                possibly_translated_inds, _ = objects.filterByPOCDConfidence(cfg.pocd_removal_threshold)
+                objects.removeObjectsByIndex(possibly_translated_inds)
             continue
 
         # if no objects yet in the map,
@@ -765,7 +786,7 @@ def main():
 
         visual_sim = compute_visual_similarities(detection_list, objects)
 
-        # maps each detection to one object (list containing the index of the matched object)
+        # maps each detection to one object (list containing the index of the matched object or None)
         match_obj_indices = match_detections_to_objects(
             match_method=cfg['match_method'],
             phys_bias=cfg['phys_bias'],
@@ -779,10 +800,10 @@ def main():
 
         ##### Perform POCD update
         if cfg.use_pocd:
-            # # Use LLM to learn the object type: Dynamic (0), Semi-Static (1), or Static (2)
-            obj_class_list = [obj["class_name"] for obj in detection_list]
-            objects_types = [POCDObjectTypes.DYNAMIC.value] * len(obj_class_list)
+            # Use LLM to get a prior of the object type: Dynamic (0), Semi-Static (1), or Static (2)
             if cfg.use_pocd_with_llm:
+                obj_class_list = [obj["class_name"] for obj in detection_list]
+                objects_types = [POCDObjectTypes.DYNAMIC.value] * len(obj_class_list)
                 cached_types = pocd_type_cache.keys()
                 for i, c in enumerate(obj_class_list):
                     if c in cached_types:
@@ -801,7 +822,7 @@ def main():
                         object_type = POCDObjectTypes.STATIC.value
                     objects_types[i] = object_type
                     pocd_type_cache[c] = object_type
-            
+
             if expected_inds:
 
                 # get change for each expected object
@@ -810,7 +831,7 @@ def main():
                                                                                                          match_indices=match_obj_indices, 
                                                                                                          default_change=cfg.pocd_default_change, 
                                                                                                          default_change_std=cfg.pocd_default_change_std)
-                
+
                 # set expected objects with no found match as disappeared
                 for index, change in zip(expected_inds, change_list):
                     if change == cfg.pocd_default_change:
@@ -819,33 +840,31 @@ def main():
 
                 # Update POCD probabilities of expected objects
                 objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
-                
-                # Remove expected objects based on POCD
+
+
+                # Get objects which are possibly translated
+                possibly_translated_inds, _ = objects.filterByPOCDConfidence(cfg.pocd_transformation_threshold, cfg.pocd_removal_threshold)
+                possibly_translated_inds = [i for i in possibly_translated_inds if i not in match_obj_indices]
+
+                # try to match possiblely translated objects to recently appeared objects
+                matched_newer_objects_inds, _ = objects.matchDissapearedObjectsToRecentObjects(cfg.look_back_time, cfg.look_forward_time, possibly_translated_inds)
+                objects.mergeObjectsWithRecentObjects(possibly_translated_inds, matched_newer_objects_inds)
                 to_remove = set()
-                pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_removal_threshold)
-                to_remove.update(pruned_object_inds)
+                to_remove.update(matched_newer_objects_inds)
 
-                # Removed objects are now "missing"
-                # objects_missing += [objects[i] for i in to_remove]
+                match_obj_indices = update_detection_matches_from_merged_objects(match_obj_indices, possibly_translated_inds, matched_newer_objects_inds)
 
-                # Translate expected objects based on POCD.
-                # When an expected object has low enough pocd score, consider that it might moved farther
-                # Compare each of these objects to all objects which appeared at a similar time as this object disappeared
-                pruned_object_inds, pruned_object_ids = objects.pruneObjectsByProbability(cfg.pocd_transformation_threshold, cfg.pocd_removal_threshold)
-                
-                # Transform to a detection, if detected
-                # objects.transformObjectsToDetection(expected_object_indices=expected_inds, transform_list=obj_transformations, inds=pruned_object_inds)
-                # Transform to similar objects in library
-                pruned_object_inds = [i for i in pruned_object_inds if i not in match_obj_indices]
-                dissapeared_match_indices, transform_list = objects.matchDissapearedObjectsToRecentObjects(cfg.look_back_time, cfg.look_forward_time, pruned_object_inds)
-                objects.mergeObjectsWithRecentObjects(pruned_object_inds, dissapeared_match_indices)
-                to_remove.update(dissapeared_match_indices)
+                # Set objects which with low pocd score as missing
+                possibly_missing_inds, _ = objects.filterByPOCDConfidence(cfg.pocd_removal_threshold)
+                possibly_missing_inds = [i for i in possibly_missing_inds if i not in match_obj_indices]
+                possibly_missing_inds = [i for i in possibly_missing_inds if i not in to_remove]
+                objects_missing += [objects[i] for i in possibly_missing_inds]
+                to_remove.update(possibly_missing_inds)
 
                 # Remove objects
                 to_remove = [i for i in list(to_remove) if i is not None]
                 to_remove.sort(reverse=True)
                 for ind in to_remove:
-                    objects_missing.append(objects[ind]) # why are objects which were merged added here?
                     objects.pop(ind)
                     locations_in_list = []
 
@@ -855,15 +874,37 @@ def main():
                             continue
                         elif match_ind == ind:
                             # a detection was matched to this object (which is now being removed)
+                            # this should never happen
                             locations_in_list.append(i)
+                            node.get_logger().warn(f"Detection {detection_list[i]['class_name']} matched to object {ind} which is being removed. This should never happen.")
+                            if ind in possibly_missing_inds:
+                                node.get_logger().warn(f"{ind} is in possibly_missing_inds.")
+                            if ind in matched_newer_objects_inds:
+                                node.get_logger().warn(f"{ind} is in matched_newer_objects_inds.")
+                            if ind in possibly_translated_inds:
+                                node.get_logger().warn(f"{ind} is in possibly_translated_inds.")
+
+                            raise ValueError("Detection matched to object which is being removed")
                         elif match_ind > ind:
                             match_obj_indices[i] -= 1
-                    
+
                     # delete the entries of this object in match_obj_indices and the corresponding detections
+                    # this should thus also never happen
                     locations_in_list = locations_in_list[::-1]
                     for i in locations_in_list:
                         match_obj_indices.pop(i)
                         detection_list.pop(i)
+
+                # Try to match missing objects to recently appeared objects
+                matched_newer_objects_inds, _ = objects.matchRemovedObjectsToRecentObjects(objects_missing, cfg.look_back_time, cfg.look_forward_time)
+                objects.mergeMissingObjectsIntoMatches(objects_missing, matched_newer_objects_inds)
+
+                # Remove newly instantiated previously missing objects from the list of missing objects
+                to_remove = set([i for i, match in enumerate(matched_newer_objects_inds) if match is not None])
+                to_remove = sorted(list(to_remove), reverse=True)
+                for i in to_remove:
+                    objects_missing.pop(i)
+
 
                 # Reject detections that are outliers
                 ### TODO: Outlier detection doesn't work (no outliers detected). Fix it or get rid of it.
@@ -880,18 +921,6 @@ def main():
                 #     detection_list.pop(i)
                 #     match_obj_indices.pop(i)
 
-                # Add back in objects bsed on POCD
-                removed_matches, transforms = objects.matchRemovedObjectsToRecentObjects(objects_missing, cfg.look_back_time, cfg.look_forward_time)
-                objects.reinstateRemovedObjects(objects_missing, removed_matches)
-
-                to_remove = set()
-                for i, match in enumerate(removed_matches):
-                    if match is None:
-                        continue
-                    to_remove.add(i)
-                to_remove = sorted(list(to_remove), reverse=True)
-                for i in to_remove:
-                    objects_missing.pop(i)
 
         ##### End POCD Update
 
@@ -986,20 +1015,25 @@ def main():
         if cfg.pocd_plot:
             plt.figure(0)
             plt.clf()
+
             data = []
+
             for obj in objects:
                 first_idx = obj['image_idx'][0]
-                history = [None] * first_idx + obj['confidence_history']
-                data.append([history, obj['class_name'], obj['id'], obj['curr_obj_num'], first_idx])
-            legend = []
+                pocd_history = [None] * first_idx + obj['confidence_history']
+                color = obj['inst_color']
+                data.append((pocd_history, obj['class_name'] + " " +  str(obj['id'])[:5], color))
+
+            data.sort(key=lambda x: x[1])
             for d in data:
-                plt.plot(d[0])
-                legend.append(d[1] + str(d[2]))
-            plt.legend(legend)
+                plt.plot(d[0], label=d[1], color=d[2])
+
+            plt.legend(loc='lower right')
             plt.ylim([0, 1])
             plt.xlim(left=0)
             plt.xlabel('Frame Index')
             plt.ylabel('POCD Confidence')
+            plt.grid(True)
             plt.title('POCD Confidence Over Time')
 
         plt.pause(0.1)

@@ -123,7 +123,9 @@ class DetectionList(list):
                 ("x", np.float32),
                 ("y", np.float32),
                 ("z", np.float32),
-                ("rgb", np.float32),
+                ("r", np.uint32),
+                ("g", np.uint32),
+                ("b", np.uint32),
             ],
         )
         offset = 0
@@ -137,14 +139,13 @@ class DetectionList(list):
             structured_array["x"][offset : offset + num_points_obj] = obj_points[:, 0]
             structured_array["y"][offset : offset + num_points_obj] = obj_points[:, 1]
             structured_array["z"][offset : offset + num_points_obj] = obj_points[:, 2]
-            structured_array["rgb"][offset : offset + num_points_obj] = (
-                (obj_colors[:, 0] << 16)
-                | (obj_colors[:, 1] << 8)
-                | (obj_colors[:, 2] << 0)
-            )
+            structured_array["r"][offset : offset + num_points_obj] = obj_colors[:, 0]
+            structured_array["g"][offset : offset + num_points_obj] = obj_colors[:, 1]
+            structured_array["b"][offset : offset + num_points_obj] = obj_colors[:, 2]
 
             offset += num_points_obj
 
+        structured_array = ros2_numpy.point_cloud2.merge_rgb_fields(structured_array)
         return ros2_numpy.point_cloud2.array_to_pointcloud2(
             structured_array, frame_id=frame_id
         )
@@ -384,7 +385,7 @@ class ProbabilisticMapObjectList(MapObjectList):
 
         return k1, k2
 
-    def pruneObjectsByProbability(self, upper_threshold: float=1, lower_threshold: float=0):
+    def filterByPOCDConfidence(self, upper_threshold: float=1, lower_threshold: float=0):
         '''
         Prune objects by probability
 
@@ -508,7 +509,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             axis_bbox = oriented_bbox.get_axis_aligned_bounding_box()
             self[ind]['bbox'] = axis_bbox
 
-    def mergeObjectsWithRecentObjects(self, dissapeared_inds: list=[], matched_inds: list=[]):
+    def mergeObjectsWithRecentObjects(self, merge_into_indices: list=[], source_object_indices: list=[]):
         """
         Merge important properties of the dissapeared objects and the matched objects
 
@@ -516,7 +517,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             dissapeared_inds: list of indices of dissapeared objects
             matched_inds: list of indices of matched objects
         """
-        assert len(dissapeared_inds) == len(matched_inds), 'Dissapeared and matched indices must be the same length'
+        assert len(merge_into_indices) == len(source_object_indices), 'Dissapeared and matched indices must be the same length'
 
         extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number', 'centroid_locations', 'bbox_shadow_hull_history']
         add_attributes = ['num_detections', 'num_obj_in_class']
@@ -537,7 +538,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             if unhandled_keys:
                 raise ValueError(f"Unhandled keys detected in obj2: {unhandled_keys}. Please update the merge function to handle these attributes.")
         
-        for d_ind, m_ind in zip(dissapeared_inds, matched_inds):
+        for d_ind, m_ind in zip(merge_into_indices, source_object_indices):
             if m_ind is None:
                 continue
             # Process extend and add attributes
@@ -650,13 +651,21 @@ class ProbabilisticMapObjectList(MapObjectList):
             source_pcd, target_pcd, threshold, transform_init, o3d.pipelines.registration.TransformationEstimationPointToPoint(), o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iteration))
         return registration_results
 
-    def matchRemovedObjectsToRecentObjects(self, removed_object_list, look_back_time: int=10, look_forward_time: int=10, threshold: float=0.7):
+    def matchRemovedObjectsToRecentObjects(self, missing_object_list, look_back_time: int=10, look_forward_time: int=10, threshold: float=0.7):
         """
         Take in a list of removed objects and match them to recently added objects.
+
+        Arguments:
+            missing_object_list: [missing_obj_1, ..., missing_obj_n]
+
+        Return:
+            matches: list of indices which match the removed objects
+                      [match_1, ..., match_n]
+                      match_i = is None if missing_obj_i is not matched to any obj in self, otherwise removed_obj_i is matched to self[match_i]
         """
         matches = []
         transforms = []
-        for missing_object in removed_object_list:
+        for missing_object in missing_object_list:
             potential_match_inds = []
             dissapeared_time = missing_object['time_of_disappearance']
             for i, obj in enumerate(self):
@@ -705,9 +714,13 @@ class ProbabilisticMapObjectList(MapObjectList):
     
         return matches, transforms
     
-    def reinstateRemovedObjects(self, removed_object_list, matches):
+    def mergeMissingObjectsIntoMatches(self, removed_object_list, matches):
         """
         Reinstate the removed objects based on the matches and transformations
+
+        removex_object_list: [removed_obj_1, ..., removed_obj_n]
+        matches: [match_1, ..., match_n]
+                 match_i = is None if removed_obj_i is not matched to any obj in self, otherwise removed_obj_i is matched to self[match_i]
         """
         assert len(removed_object_list) == len(matches), 'Dissapeared and matched indices must be the same length'
 
