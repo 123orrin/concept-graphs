@@ -1175,8 +1175,9 @@ def batch_mask_depth_to_points_colors(
     depth_tensor: torch.Tensor,
     masks_tensor: torch.Tensor,
     cam_K: torch.Tensor,
+    min_max_depth: tuple,
     image_rgb_tensor: torch.Tensor = None,  # Parameter for RGB image tensor
-    device: str = 'cuda'
+    device: str = 'cuda',
 ) -> tuple:
     """
     Converts a batch of masked depth images to 3D points and corresponding colors.
@@ -1191,9 +1192,15 @@ def batch_mask_depth_to_points_colors(
     Returns:
         tuple: A tuple containing the 3D points tensor of shape (N, H, W, 3) and the colors tensor of shape (N, H, W, 3).
     """
+
+    print(f"depth_tensor shape: {depth_tensor.shape}, masks_tensor shape: {masks_tensor.shape}, cam_K shape: {cam_K.shape}")
     N, H, W = masks_tensor.shape
     fx, fy, cx, cy = cam_K[0, 0], cam_K[1, 1], cam_K[0, 2], cam_K[1, 2]
-    
+    depth_tensor_bkg = depth_tensor.clone()
+
+    depth_tensor[torch.logical_or(depth_tensor < min_max_depth[0], depth_tensor > min_max_depth[1])] = 0
+
+
     # Generate grid of pixel coordinates
     y, x = torch.meshgrid(torch.arange(0, H, device=device), torch.arange(0, W, device=device), indexing='ij')
     z = depth_tensor.repeat(N, 1, 1) * masks_tensor  # Apply masks to depth
@@ -1205,20 +1212,45 @@ def batch_mask_depth_to_points_colors(
     
     points = torch.stack((x, y, z), dim=-1) * valid.unsqueeze(-1)  # Shape: (N, H, W, 3)
 
+    # background points
+    # Visualize the first mask for debugging
+
+    
+    bg_mask = 1 - masks_tensor.sum(dim=0).clamp(0, 1)
+
+    H, W = bg_mask.shape
+
+    # depth tensor has shape 360
+    # bg_mask has shape 360, 640
+
+
+    z = depth_tensor_bkg * bg_mask
+    
+    y, x = torch.meshgrid(torch.arange(0, H, device=device), torch.arange(0, W, device=device), indexing='ij')
+    x = (x - cx) * z / fx
+    y = (y - cy) * z / fy
+    valid = (z > 0).float()
+
+    bg_points = torch.stack((x, y, z), dim=-1) * valid.unsqueeze(-1) 
+
     if image_rgb_tensor is not None:
-        # Repeat RGB image for each mask and apply masks
+        bg_colors = image_rgb_tensor * bg_mask.unsqueeze(-1)  # (H, W, 3)
+        # Object colors
         repeated_rgb = image_rgb_tensor.repeat(N, 1, 1, 1) * masks_tensor.unsqueeze(-1)
-        colors = repeated_rgb * valid.unsqueeze(-1)  # Apply valid mask to filter out background
+        colors = repeated_rgb * valid.unsqueeze(-1)
     else:
+        bg_colors = torch.randint(0, 256, (H, W, 3), device=device, dtype=torch.float32) / 255.0 * bg_mask.unsqueeze(-1)
         print("No RGB image provided, assigning random colors to objects")
-        # log it as well
         logging.warning("No RGB image provided, assigning random colors to objects")
-        # Generate a random color for each mask
-        random_colors = torch.randint(0, 256, (N, 3), device=device, dtype=torch.float32) / 255.0  # RGB colors in [0, 1]
-        # Expand dims to match (N, H, W, 3) and apply to valid points
+        random_colors = torch.randint(0, 256, (N, 3), device=device, dtype=torch.float32) / 255.0
         colors = random_colors.unsqueeze(1).unsqueeze(1).expand(-1, H, W, -1) * valid.unsqueeze(-1)
 
-    return points, colors
+    print(f"Points shape: {points.shape}, Colors shape: {colors.shape}")
+    print(f"Background Points shape: {bg_points.shape}, Background Colors shape: {bg_colors.shape}")
+    
+    # Visualize background points for debugging
+    
+    return points, colors,bg_points,bg_colors
 
 
 def detections_to_obj_pcd_and_bbox(
@@ -1235,7 +1267,8 @@ def detections_to_obj_pcd_and_bbox(
     dbscan_eps = None,
     dbscan_min_points = None,
     run_dbscan = None,
-    device='cuda'
+    device='cuda',
+    min_max_depth: tuple = None,
 ):
     """
     This function processes a batch of objects to create colored point clouds, apply transformations, and compute bounding boxes.
@@ -1265,8 +1298,8 @@ def detections_to_obj_pcd_and_bbox(
     else:
         image_rgb_tensor = None
 
-    points_tensor, colors_tensor = batch_mask_depth_to_points_colors(
-        depth_tensor, masks_tensor, cam_K_tensor, image_rgb_tensor, device
+    points_tensor, colors_tensor, bg_points, bg_colours = batch_mask_depth_to_points_colors(
+        depth_tensor, masks_tensor, cam_K_tensor, min_max_depth, image_rgb_tensor, device
     )
 
     processed_objects = [None] * N  # Initialize with placeholders
@@ -1298,8 +1331,27 @@ def detections_to_obj_pcd_and_bbox(
             continue
 
         processed_objects[i] = {'pcd': pcd, 'bbox': bbox}
+    valid_bg_mask = bg_points[:, :, 2] > 0
+    valid_bg_points = bg_points[valid_bg_mask]
+    valid_bg_colors = bg_colours[valid_bg_mask] if bg_colours is not None else None
 
-    return processed_objects
+    if valid_bg_points.shape[0] > 0:
+        # Optionally downsample
+        valid_bg_points, valid_bg_colors = dynamic_downsample(valid_bg_points, colors=valid_bg_colors, target=obj_pcd_max_points)
+
+        background_pc = o3d.geometry.PointCloud()
+        background_pc.points = o3d.utility.Vector3dVector(valid_bg_points.cpu().numpy())
+        if trans_pose is not None:
+            background_pc.transform(trans_pose)
+
+    
+
+        if valid_bg_colors is not None:
+            background_pc.colors = o3d.utility.Vector3dVector(valid_bg_colors.cpu().numpy())
+    else:
+        background_pc = o3d.geometry.PointCloud()
+
+    return processed_objects, background_pc
 
 
 def processing_needed(

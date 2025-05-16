@@ -113,7 +113,7 @@ from message_filters import Subscriber as MF_Subscriber, ApproximateTimeSynchron
 from nav_msgs.msg import OccupancyGrid
 import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
-
+from conceptgraph.utils.occupancy_map_publisher import OccupancyMapPublisher
 
 DEBUG = True
 # Disable torch gradient computation
@@ -257,8 +257,8 @@ class Subscriber(Node):
             depth = depth_msg
         else:
             depth = np.frombuffer(depth_msg.data, dtype=np.uint16).reshape(self.cfg["camera_params"]["image_height"], self.cfg["camera_params"]["image_width"])
-        invalid_indices = (depth < self.cfg.min_depth * 1000) | (depth > self.cfg.max_depth * 1000)
-        depth[invalid_indices] = 0
+        # invalid_indices = (depth < self.cfg.min_depth * 1000) | (depth > self.cfg.max_depth * 1000)
+        # depth[invalid_indices] = 0
         # Resize
         depth = cv2.resize(
             depth.astype(float),
@@ -290,8 +290,8 @@ class Subscriber(Node):
         uv[:, 1] /= uv[:, 2]
         # Keep only valid points that are in front of the camera, inside the image frame, and within the depth range
         valid_indices = (uv[:, 2] > 0) & (uv[:, 0] >= 0) & (uv[:, 0] < self.cfg["camera_params"]["image_width"]) & \
-                        (uv[:, 1] >= 0) & (uv[:, 1] < self.cfg["camera_params"]["image_height"]) & \
-                        (uv[:, 2] >= self.cfg.min_depth) & (uv[:, 2] <= self.cfg.max_depth)
+                        (uv[:, 1] >= 0) & (uv[:, 1] < self.cfg["camera_params"]["image_height"]) # & \
+                        # (uv[:, 2] >= self.cfg.min_depth) & (uv[:, 2] <= self.cfg.max_depth)
         # Create depth image
         depth_image = np.zeros((self.cfg["camera_params"]["image_height"], self.cfg["camera_params"]["image_width"]), dtype=np.uint16)
         uv_valid = uv[valid_indices]
@@ -570,6 +570,9 @@ def main():
         node=node,
         llm_client=llamaClient_similarity,
     )
+    occupancy_map_publisher = OccupancyMapPublisher(
+        node=node,
+    )
 
     while rclpy.ok():
         # update reference of objects (filter method below creates a new object sometimes, TODO change this) 
@@ -607,6 +610,7 @@ def main():
         color_np = color_tensor.cpu().numpy() # (H, W, 3)
         image_rgb = (color_np).astype(np.uint8) # (H, W, 3)
         assert image_rgb.max() > 1, "Image is not in range [0, 255]"
+
 
         # Store current frame image
         color_path = Path(cfg.color_path) / f"{frame_idx:06}.png"
@@ -683,7 +687,7 @@ def main():
         # this helps make sure things like pillows on couches are separate objects
         gobs['mask'] = mask_subtract_contained(gobs['xyxy'], gobs['mask'])
 
-        obj_pcds_and_bboxes = measure_time(detections_to_obj_pcd_and_bbox)(
+        obj_pcds_and_bboxes, background_pcd = measure_time(detections_to_obj_pcd_and_bbox)(
             depth_array=depth_array,
             masks=gobs['mask'],
             cam_K=intrinsics.cpu().numpy()[:3, :3],  # Camera intrinsics
@@ -693,7 +697,14 @@ def main():
             spatial_sim_type=cfg.spatial_sim_type,
             obj_pcd_max_points=-1,
             device=cfg.device,
+            min_max_depth = (cfg.min_depth, cfg.max_depth),
         )
+
+        # TODO
+        occupancy_map_publisher.object_list = obj_pcds_and_bboxes
+        occupancy_map_publisher.background_pc =  background_pcd
+        occupancy_map_publisher.test_publish_pcd()
+        #occupancy_map_publisher.publish_occupancy_map()
 
         for obj in obj_pcds_and_bboxes:
             if obj:
