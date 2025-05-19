@@ -229,8 +229,11 @@ class ProbabilisticMapObjectList(MapObjectList):
         expected_object_indices = []
         expected_object_ids = []
 
-        # TODO: for some reason here the math is either wrong or the intrinsics are wrong, such that everything works out when the intrinsics are multiplied by 2 (check later)
-        intrinsics = 2*intrinsics[:3, :3]
+        intrinsics = intrinsics[:3, :3]
+
+        if debug_projection:
+            plt.figure("projection")
+            plt.clf()
 
         for idx, obj in enumerate(self):
             points = np.asarray(obj['pcd'].points)
@@ -253,8 +256,6 @@ class ProbabilisticMapObjectList(MapObjectList):
                 expected_object_ids.append(obj['id'])
 
             if debug_projection and obj['class_name'] == 'keyboard':
-                plt.figure("projection")
-                plt.clf()
                 plt.scatter(uv[:, 0], uv[:, 1], s=1, c='blue', alpha=0.5)
                 plt.xlim(0, img_width)
                 plt.ylim(0, img_height)

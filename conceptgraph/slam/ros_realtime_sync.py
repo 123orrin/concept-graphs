@@ -734,7 +734,7 @@ def main():
 
         intrinsics_np = intrinsics.cpu().numpy()
         # Note: Here we are passing in height as width (and vice-versa) since the images got flipped
-        expected_inds, expected_ids = objects.expectedToObserve(adjusted_pose, intrinsics_np, cfg['camera_params']['image_width'], cfg['camera_params']['image_height'], cfg.min_depth, cfg.max_depth, cfg['pocd_visibility_threshold'])
+        expected_inds, expected_ids = objects.expectedToObserve(adjusted_pose, intrinsics_np, cfg.desired_width, cfg.desired_height, cfg.min_depth, cfg.max_depth, cfg['pocd_visibility_threshold'], debug_projection=False)
 
         for obj in objects:
             obj['confidence_history'] += [obj['pocd_confidence']]
