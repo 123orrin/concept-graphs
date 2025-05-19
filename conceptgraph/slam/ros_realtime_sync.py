@@ -701,9 +701,8 @@ def main():
         )
 
         # TODO
-        occupancy_map_publisher.object_list = obj_pcds_and_bboxes
         occupancy_map_publisher.background_pc =  background_pcd
-        occupancy_map_publisher.test_publish_pcd()
+        #occupancy_map_publisher.test_publish_pcd()
         #occupancy_map_publisher.publish_occupancy_map()
 
         for obj in obj_pcds_and_bboxes:
@@ -924,6 +923,8 @@ def main():
             # Note: Removed 'match_method' and 'phys_bias' as they do not appear in the provided merge function
         )
 
+
+
         # map_edges = process_edges(match_indices, gobs, len(objects), objects, map_edges)
 
         is_final_frame = False #frame_idx == len(dataset) - 1 ... Still needed for other function signatures
@@ -1026,6 +1027,8 @@ def main():
             obj["n_points"] = len(reduced_pcd.points)
 
         node.objects = objects
+        occupancy_map_publisher.object_list = detection_list
+        occupancy_map_publisher.test_publish_pcd()
 
         if cfg.periodically_save_pcd and (counter % cfg.periodically_save_pcd_interval == 0):
             # save the pointcloud

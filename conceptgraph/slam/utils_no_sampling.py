@@ -1215,8 +1215,10 @@ def batch_mask_depth_to_points_colors(
     # background points
     # Visualize the first mask for debugging
 
+    bg_mask = F.max_pool2d(masks_tensor.sum(dim=0).clamp(0, 1).unsqueeze(0).unsqueeze(0),kernel_size=23,stride = 1, padding=23//2).squeeze()
+    bg_mask = (bg_mask > 0).float()
     
-    bg_mask = 1 - masks_tensor.sum(dim=0).clamp(0, 1)
+    bg_mask = 1 - bg_mask
 
     H, W = bg_mask.shape
 
@@ -1408,6 +1410,22 @@ def prepare_objects_save_vis(objects: ProbabilisticMapObjectList, downsample_siz
                 del objects_to_save[i][k]
                 
     return objects_to_save.to_serializable()
+
+
+def add_o3d_pcs(pc1, pc2):
+    p1 = np.asarray(pc1.points)
+    if pc1.has_colors():
+        p1c = np.asarray(pc1.colors)
+    p2 = np.asarray(pc2.points)
+    if pc2.has_colors():
+        p2c = np.asarray(pc2.colors)
+    p3 = np.concatenate((p1,p2),axis=0)
+    pcd = o3d.geometry.PointCloud()
+    if pc2.has_colors() and pc1.has_colors():
+        p3c = np.concatenate((p1c,p2c),axis=0)
+        pcd.colors = o3d.utility.Vector3dVector(p3c)
+    pcd.points = o3d.utility.Vector3dVector(p3)
+    return pcd
 
 def process_edges(match_indices, gobs, initial_objects_count, objects, map_edges):
     # Step 1: Generate match_indices_w_new_obj with indices for new objects

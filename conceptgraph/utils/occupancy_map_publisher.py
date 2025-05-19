@@ -2,7 +2,8 @@ from conceptgraph.occupancygrid.utils import adjust_map_size, world_to_cell
 import rclpy
 import rclpy.duration
 from rclpy.node import Node
-from sensor_msgs.msg import PointCloud2, Image
+import rclpy.time
+from sensor_msgs.msg import PointCloud2, Image 
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
 from tf2_ros.buffer import Buffer
@@ -14,9 +15,9 @@ from geometry_msgs.msg import Pose
 import torch
 from sensor_msgs.msg import PointCloud2
 import ros2_numpy.point_cloud2 as point_cloud2
-
+from conceptgraph.slam.utils_no_sampling import add_o3d_pcs
 from conceptgraph.utils.voxel import VoxelizedPointcloud
-
+import copy
 from scipy.spatial import cKDTree
 
 import open3d as o3d
@@ -55,13 +56,13 @@ class OccupancyMapPublisher():
         self.points = []
         self.object_list = None
         self.background_pc = None
+        self.background = None
 
         self.objects = None
         self.objects_recive_time = None
         self.has_recived_objects = False
 
         self.global_map = None
-
         self.publisher = self.node.create_publisher(OccupancyGrid, "/occupancy_map", 10)
         self.global_pointcloud_publisher = self.node.create_publisher(
             PointCloud2, "/global_pointcloud", 10
@@ -84,7 +85,6 @@ class OccupancyMapPublisher():
         self.node.get_logger().info(
             f"Occupancy Map Publisher Node has been started. Using robot base height: {self.floor_height}"
         )
-
     def _publish_global_pc(self):
         """       
         Publishes the global voxelized point cloud as a PointCloud2 message.
@@ -107,7 +107,6 @@ class OccupancyMapPublisher():
 
 
     def _get_robot_base_z(self):
-        return -1.5
         req_time = rclpy.time.Time()
         tf_available = False
         while not tf_available:
@@ -174,7 +173,7 @@ class OccupancyMapPublisher():
 
     def _publish_map(self, map: np.ndarray):
         occupancy_grid = OccupancyGrid()
-        occupancy_grid.header.stamp = self.get_clock().now().to_msg()
+        #occupancy_grid.header.stamp = self.get_clock().now().to_msg()
         occupancy_grid.header.frame_id = "map"
         occupancy_grid.info.resolution = self.occupancy_info["resolution"]
         occupancy_grid.info.height = map.shape[0]
@@ -210,17 +209,34 @@ class OccupancyMapPublisher():
 
 
 
-
-    #def publish_occupancy_map(self):
+    """
+    def publish_occupancy_map(self):
         # add backrgound point cloud to voxel map
-
+        if self.background_pc is not None and len(self.background_pc.points)>0:
+            if self.background is not None:
+                self.background = add_o3d_pcs(self.background_pc,self.background)
+            else:
+                self.background = self.background_pc
+            downpcd = self.background.voxel_down_sample(voxel_size = 0.05)
+            self.background = downpcd
+            temp_cloud = copy.deepcopy(downpcd)
         # tempoarily add the object point clouds to the voxel map/point cloud obtained from the voxel map/occupancy map
-
+        for obj in self.object_list:
+            if obj and obj["pcd"] is not None:
+                points = np.asarray(obj["pcd"].points)
+                obj_pc = o3d.
+                if obj["pcd"].has_colors():
+                    colors = np.asarray(obj["pcd"].colors)
+                else:
+                    colors = np.zeros_like(points)
+                if len(points) > 0:
+                    all_points.append(points)
+                    all_colors.append(colors)
         # (combine with lidar)
 
         # publish point cloud/occupancy map
-
-
+    
+    """
 
 
     def test_publish_pcd(self):
@@ -248,7 +264,20 @@ class OccupancyMapPublisher():
                 bg_colors = np.zeros_like(bg_points)
             all_points.append(bg_points)
             all_colors.append(bg_colors)
-
+        if self.background_pc is not None and len(self.background_pc.points)>0:
+            if self.background is not None:
+                self.background = add_o3d_pcs(self.background_pc,self.background)
+            else:
+                self.background = self.background_pc
+            downpcd = self.background.voxel_down_sample(voxel_size = 0.05)
+            downpcd,_ = downpcd.remove_statistical_outlier(nb_neighbors=20,std_ratio=2.0)
+            bg_points = np.asarray(downpcd.points)
+            if downpcd.has_colors():
+                bg_colors = np.asarray(self.background_pc.colors)
+            else:
+                bg_colors = np.zeros_like(bg_points)
+            all_points.append(bg_points)
+            all_colors.append(bg_colors)
         # Concatenate all
         if all_points:
             all_points = np.concatenate(all_points, axis=0)
@@ -259,6 +288,36 @@ class OccupancyMapPublisher():
             pc_msg = o3dpcd_to_pointcloud2(combined_pcd, frame_id="map")
             if pc_msg is not None:
                 self.global_pointcloud_publisher.publish(pc_msg)
+            point_bounds_min = np.min(all_points[:2,:], axis=1)
+            point_bounds_max = np.max(all_points[:2,:], axis=1)
+            if np.any(point_bounds_min < self.lower_corner_xy - self.margin) or np.any(point_bounds_max > self.upper_corner_xy + self.margin):
+                self.lower_corner_xy = np.minimum(point_bounds_min, self.lower_corner_xy - self.margin)
+                self.upper_corner_xy = np.maximum(point_bounds_max, self.upper_corner_xy + self.margin)
+                self.corners_updated = True
+        if self.corners_updated:
+            self._adjust_map_size(self.lower_corner_xy - self.margin, self.upper_corner_xy + self.margin)
+            self.corners_updated = False
+     
+
+
+        cells = world_to_cell(
+                        all_points[:, :2],
+                        self.occupancy_info["origin"],
+                        self.occupancy_info["resolution"],
+                    )
+
+        occupied = (all_points[:, 2] > self.floor_height) & (all_points[:, 2] < self.robot_height)
+
+        inside_map = (cells[:, 0] >= 0) & (cells[:, 0] < self.occupancy.shape[1]) & (cells[:, 1] >= 0) & (cells[:, 1] < self.occupancy.shape[0])
+        occupied_cells = cells[np.logical_and(occupied, inside_map), :]
+        unoccupied_cells = cells[np.logical_and(np.logical_not(occupied), inside_map), :]
+
+        self.occupancy[unoccupied_cells[:, 1], unoccupied_cells[:, 0]] = 0
+        self.occupancy[occupied_cells[:, 1], occupied_cells[:, 0]] = 100
+
+        self.node.get_logger().info("Occupancy map published.")
+        self._publish_map(self.occupancy)
+
 
 
     def main(self):
@@ -367,11 +426,11 @@ def o3dpcd_to_pointcloud2(pcd, frame_id="map"):
     points = np.asarray(pcd.points)
     if len(points) == 0:
         return None
-    if pcd.has_colors():
+    if False:
         colors = np.asarray(pcd.colors)
-        arr = np.zeros(points.shape[0], dtype=[
+        arr = np.zeros(len(pcd.points), dtype=[
             ('x', np.float32), ('y', np.float32), ('z', np.float32),
-            ('r', np.float32), ('g', np.float32), ('b', np.float32)
+            ('r', np.uint32), ('g', np.uint32), ('b', np.uint32)
         ])
         arr['x'] = points[:, 0]
         arr['y'] = points[:, 1]
@@ -386,6 +445,8 @@ def o3dpcd_to_pointcloud2(pcd, frame_id="map"):
         arr['x'] = points[:, 0]
         arr['y'] = points[:, 1]
         arr['z'] = points[:, 2]
+    
+    #arr = point_cloud2.merge_rgb_fields(arr)
     msg = point_cloud2.array_to_pointcloud2(arr, stamp=None, frame_id=frame_id)
     return msg
 
