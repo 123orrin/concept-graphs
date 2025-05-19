@@ -529,7 +529,7 @@ class ProbabilisticMapObjectList(MapObjectList):
             axis_bbox = oriented_bbox.get_axis_aligned_bounding_box()
             self[ind]['bbox'] = axis_bbox
 
-    def mergeObjectsWithRecentObjects(self, merge_into_indices: list=[], source_object_indices: list=[]):
+    def mergeObjectsWithRecentObjects(self, merge_into_indices: list, source_object_indices: list, source_object_list: list=None):
         """
         Merge important properties of the dissapeared objects and the matched objects
 
@@ -538,6 +538,9 @@ class ProbabilisticMapObjectList(MapObjectList):
             matched_inds: list of indices of matched objects
         """
         assert len(merge_into_indices) == len(source_object_indices), 'Dissapeared and matched indices must be the same length'
+
+        if source_object_list is None:
+            source_object_list = self
 
         extend_attributes = ['image_idx', 'mask_idx', 'color_path', 'class_id', 'mask', 'xyxy', 'conf', 'contain_number', 'centroid_locations', 'bbox_shadow_hull_history']
         add_attributes = ['num_detections', 'num_obj_in_class']
@@ -563,26 +566,26 @@ class ProbabilisticMapObjectList(MapObjectList):
                 continue
             # Process extend and add attributes
             for attr in extend_attributes:
-                if attr in self[d_ind] and attr in self[m_ind]:
-                    self[d_ind][attr].extend(self[m_ind][attr])
+                if attr in self[d_ind] and attr in source_object_list[m_ind]:
+                    self[d_ind][attr].extend(source_object_list[m_ind][attr])
             
             for attr in add_attributes:
-                if attr in self[d_ind] and attr in self[m_ind]:
-                    self[d_ind][attr] += self[m_ind][attr]
+                if attr in self[d_ind] and attr in source_object_list[m_ind]:
+                    self[d_ind][attr] += source_object_list[m_ind][attr]
 
             # Process custom
-            self[d_ind]['pcd'] = self[m_ind]['pcd']
-            self[d_ind]['clip_ft'] = self[m_ind]['clip_ft']
-            self[d_ind]['bbox'] = self[m_ind]['bbox']
-            self[d_ind]['n_points'] = self[m_ind]['n_points']
+            self[d_ind]['pcd'] = source_object_list[m_ind]['pcd']
+            self[d_ind]['clip_ft'] = source_object_list[m_ind]['clip_ft']
+            self[d_ind]['bbox'] = source_object_list[m_ind]['bbox']
+            self[d_ind]['n_points'] = source_object_list[m_ind]['n_points']
             
-            self[d_ind]['last_observed_time'] = self[m_ind]['last_observed_time']
+            self[d_ind]['last_observed_time'] = source_object_list[m_ind]['last_observed_time']
             self[d_ind]['time_of_disappearance'] = -1
 
             # Process mean attributes
             for attr in pocd_mean_attributes:
-                if attr in self[d_ind] and attr in self[m_ind]:
-                    self[d_ind][attr] = (self[d_ind][attr] + self[m_ind][attr]) / 2
+                if attr in self[d_ind] and attr in source_object_list[m_ind]:
+                    self[d_ind][attr] = (self[d_ind][attr] + source_object_list[m_ind][attr]) / 2
 
         return True
 
@@ -591,6 +594,73 @@ class ProbabilisticMapObjectList(MapObjectList):
         for i in inds:
             self.pop(i)
         return True
+
+    def matchDissapearedObjectsToDetections(self, inds: list, detection_list: list, detections_visual_sim: torch.tensor, detections_already_matched, threshold: float=0.7):
+        """
+        Matches dissapeared objects (self[inds...]) to detections. Only consider detections that were not yet matched to an object, i.e. detection_list[np.logial_not(detections_already_matched)].
+
+        Arguments:
+            inds: list of indices of objects in self to match
+            detection_list: list of detections
+            detections_visual_sim: visual similarity between the detections (N) and all the objects in self (M). shape NxM
+            detections_already_matched: list of booleans indicating if the detection was already matched to an object. shape N
+            threshold: threshold for visual similarity
+        Returns:
+            matches: list of indices which match the disappeared objects
+            transforms: list of transformations from the dissapeared object to the matched object
+        """
+        num_detected_objects = len(detection_list)
+        if len(detections_visual_sim) != num_detected_objects or len(detections_already_matched) != num_detected_objects:
+            raise ValueError('The length of the visual similarity and matched objects lists must be the same as the detection list') 
+
+
+        matches = []
+        transforms = []
+        for missing_object_ind in inds:
+            if all(detections_already_matched):
+                # No potential matches
+                matches.append(None)
+                transforms.append(np.eye(4))
+                continue
+
+            visual_similarities = detections_visual_sim[:, missing_object_ind]
+            visual_similarities[detections_already_matched] = -1
+
+            # Return object index with highest similarity
+            potential_matches_mask = visual_similarities > threshold
+            if not torch.any(potential_matches_mask):
+                matches.append(None)
+                transforms.append(np.eye(4))
+                continue
+
+            best_match_ind = None
+            best_registration = None
+            best_score = float('inf')
+
+            for i, potential_match_det in enumerate(detection_list):
+                if not potential_matches_mask[i]:
+                    continue
+                registration_results = self.getICPRegistration(
+                    self[missing_object_ind]['pcd'],
+                    potential_match_det['pcd'],
+                    threshold=0.01,
+                    max_iteration=100
+                )
+                print(registration_results.transformation)
+                if registration_results.inlier_rmse < best_score:
+                    best_score = registration_results.inlier_rmse
+                    best_match_ind = i
+                    best_registration = registration_results
+
+            if best_match_ind is None or best_registration is None:
+                matches.append(None)
+                transforms.append(np.eye(4))
+                continue
+
+            matches.append(best_match_ind)
+            transforms.append(registration_results.transformation)
+    
+        return matches, transforms
 
     def matchDissapearedObjectsToRecentObjects(self, look_back_time: int=10, look_forward_time: int=10, inds: list=[], threshold: float=0.7):
         """

@@ -841,12 +841,20 @@ def main():
                 # Update POCD probabilities of expected objects
                 objects.updateProbability(change_list, std_change_list, expected_ids, cap=cfg.pocd_response)
 
+                # try to match expected but unobserved objects directly to detections
+                dissappeared_inds = []
+                if cfg.use_pocd_detection_matching:
+                    dissappeared_inds = [i for i in expected_inds if i not in match_obj_indices]
+                    matched_detections_inds, _ = objects.matchDissapearedObjectsToDetections(dissappeared_inds, detection_list, visual_sim, [i is not None for i in match_obj_indices])
+                    objects.mergeObjectsWithRecentObjects(dissappeared_inds, matched_detections_inds, detection_list)
+                    dissappeared_inds = [obj_i for obj_i, matched_det_ind  in zip(dissappeared_inds, matched_detections_inds) if matched_det_ind is None]
 
                 # Get objects which are possibly translated
                 possibly_translated_inds, _ = objects.filterByPOCDConfidence(cfg.pocd_transformation_threshold, cfg.pocd_removal_threshold)
                 possibly_translated_inds = [i for i in possibly_translated_inds if i not in match_obj_indices]
+                possibly_translated_inds = [i for i in possibly_translated_inds if i not in dissappeared_inds]
 
-                # try to match possiblely translated objects to recently appeared objects
+                # try to matching to recently appeared objects
                 matched_newer_objects_inds, _ = objects.matchDissapearedObjectsToRecentObjects(cfg.look_back_time, cfg.look_forward_time, possibly_translated_inds)
                 objects.mergeObjectsWithRecentObjects(possibly_translated_inds, matched_newer_objects_inds)
                 to_remove = set()

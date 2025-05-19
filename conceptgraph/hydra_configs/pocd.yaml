@@ -3,6 +3,7 @@ defaults:
 
 use_pocd: !!bool True
 
+use_pocd_detection_matching: !!bool True # on False, pocd scores are only used to match already instantiated objects to each other, on True, match also detection to expected but currently not observed objects
 use_pocd_with_llm: !!bool False
 use_similarity_with_llm: !!bool True
 llm_model_id: "meta-llama/Meta-Llama-3.1-8B-Instruct" # ["google/gemma-2b-it", "meta-llama/Meta-Llama-3.1-8B-Instruct"]
