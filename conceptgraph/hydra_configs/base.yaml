@@ -2,7 +2,7 @@ defaults:
   - override hydra/job_logging: custom_logging_format
 
 ### Visualization
-use_rerun: !!bool True
+use_rerun: !!bool False
 
 ### Saving
 # Save paths

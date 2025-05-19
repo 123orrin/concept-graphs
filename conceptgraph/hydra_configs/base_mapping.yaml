@@ -21,7 +21,7 @@ match_method: sep_thresh # "sep_thresh", "sim_sum"
 # Only when match_method=="sep_thresh"
 prioritize_semantic_sim: !!bool False
 semantic_threshold: 0.7
-physical_threshold: 0.7
+physical_threshold: 0.5
 # Only when match_method=="sim_sum"
 sim_threshold: 0.9
 
@@ -39,7 +39,7 @@ min_points_threshold: 16 # projected and sampled pcd with less points will be sk
 
 # point cloud processing
 obj_pcd_max_points: 1000 # Determines the maximum point count for object point clouds; exceeding this triggers downsampling to approx max points. Set to -1 to disable.
-downsample_voxel_size: 0.01
+downsample_voxel_size: 0.015
 dbscan_remove_noise: !!bool True
 dbscan_eps: 0.15
 dbscan_min_points: 50
