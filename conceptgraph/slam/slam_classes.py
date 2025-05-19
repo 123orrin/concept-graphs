@@ -10,6 +10,7 @@ import open3d as o3d
 from scipy.special import gammaln
 from scipy.stats import norm, uniform
 import ros2_numpy
+import matplotlib.pyplot as plt
 
 def to_numpy(tensor):
     if isinstance(tensor, np.ndarray):
@@ -211,7 +212,7 @@ class ProbabilisticMapObjectList(MapObjectList):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def expectedToObserve(self, camera_pose, intrinsics, img_height, img_width, min_depth, max_depth, visibility_threshold=0.35):
+    def expectedToObserve(self, camera_pose, intrinsics, img_height, img_width, min_depth, max_depth, visibility_threshold=0.35, debug_projection=False):
         '''
         Compute the expected objects to observe given the pose and field of view.
 
@@ -226,26 +227,44 @@ class ProbabilisticMapObjectList(MapObjectList):
             expected_object_ids: a list of ids of the expected objects to observe
         '''
         expected_object_indices = []
-        expected_object_ids = []        
-        
+        expected_object_ids = []
+
+        # TODO: for some reason here the math is either wrong or the intrinsics are wrong, such that everything works out when the intrinsics are multiplied by 2 (check later)
+        intrinsics = 2*intrinsics[:3, :3]
+
         for idx, obj in enumerate(self):
             points = np.asarray(obj['pcd'].points)
             points = np.linalg.inv(camera_pose) @ np.vstack([points.T, np.ones(points.shape[0])])
-            uv = (intrinsics @ points).T
-            uv[:, 0] /= uv[:, 2]
-            uv[:, 1] /= uv[:, 2]
+            uv = points
+            uv[0, :] /= uv[2, :]
+            uv[1, :] /= uv[2, :]
+            uv[2, :] = 1
+            uv = (intrinsics @ uv[:3,:]).T
 
             total_points = uv.shape[0]
             valid_indices = (uv[:, 2] > 0) & (uv[:, 0] >= 0) & (uv[:, 0] < img_width) & \
                         (uv[:, 1] >= 0) & (uv[:, 1] < img_height) & \
                         (uv[:, 2] >= min_depth) & (uv[:, 2] <= max_depth)
-            uv = uv[valid_indices]
+            uv = uv[valid_indices,:]
             expected_points = uv.shape[0]
 
             if expected_points / total_points > visibility_threshold:
                 expected_object_indices.append(idx)
                 expected_object_ids.append(obj['id'])
-            
+
+            if debug_projection and obj['class_name'] == 'keyboard':
+                plt.figure("projection")
+                plt.clf()
+                plt.scatter(uv[:, 0], uv[:, 1], s=1, c='blue', alpha=0.5)
+                plt.xlim(0, img_width)
+                plt.ylim(0, img_height)
+                plt.xlabel('u (x-axis)')
+                plt.ylabel('v (y-axis)')
+                plt.gca().set_aspect('equal', adjustable='box')
+                plt.title('Projection of Points onto Image Plane')
+                plt.gca().invert_yaxis()
+                plt.pause(0.1)
+
         return expected_object_indices, expected_object_ids
     
     def updateAge(self, time, ids=None):
